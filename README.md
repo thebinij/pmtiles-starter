@@ -20,7 +20,7 @@ PMTiles is a single-file archive. MapLibre reads only the tiles it needs via byt
 
 ## What this demo shows
 
-- **Side-by-side tabs** — same world map loaded as GeoJSON (slow) vs PMTiles (fast), with load-time comparison
+- **Side-by-side tabs** — same world map as GeoJSON vs PMTiles, with guidance on when each format fits
 - Converting GeoJSON to `.pmtiles` with [tippecanoe](https://github.com/felt/tippecanoe)
 - Loading PMTiles in MapLibre GL via the `pmtiles://` protocol
 - Serving `.pmtiles` with **byte-range support** (required for PMTiles to work)
@@ -46,7 +46,8 @@ npm run tiles
 This runs tippecanoe:
 
 ```bash
-tippecanoe -o public/nepal.pmtiles --layer=districts --generate-ids geojsons/nepal.geojson
+tippecanoe -o public/nepal.pmtiles --layer=provinces --generate-ids geojsons/nepal.geojson
+tippecanoe -o public/nepal-districts.pmtiles --layer=districts --generate-ids geojsons/nepal-districts.geojson
 tippecanoe -o public/india.pmtiles --layer=districts --generate-ids geojsons/india_state.geojson
 ```
 

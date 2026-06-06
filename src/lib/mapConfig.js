@@ -1,5 +1,17 @@
-/** Detail overlays appear at this zoom and above */
+/** Nepal provinces (nepal.geojson) — first detail level */
 export const DETAIL_ZOOM = 4;
+
+/** Nepal districts (nepal-districts.geojson) — start fading in */
+export const NEPAL_DISTRICT_ZOOM = 5;
+
+/** Nepal districts fully visible */
+export const NEPAL_DISTRICT_FULL_ZOOM = 6;
+
+/** Nepal local units (nepal-local.geojson) — start fading in */
+export const NEPAL_LOCAL_ZOOM = 7;
+
+/** Nepal local units fully visible */
+export const NEPAL_LOCAL_FULL_ZOOM = 8;
 
 /** Bounds [sw, ne] used to fit the full world inside the map panel */
 export const WORLD_BOUNDS = [
@@ -15,22 +27,32 @@ export const WORLD_MAX_ZOOM = DETAIL_ZOOM - 0.1;
 export const FORMAT_META = {
   geojson: {
     label: "GeoJSON",
-    tagline: "Download all · parse all",
-    hint: "Every source file must fully download and be parsed as JSON before the map can render. Size is similar to PMTiles — the slowness is the all-at-once download and browser parsing, not the file size alone.",
-    points: [
-      "3 separate HTTP requests, each returns the entire file",
-      "Browser parses the full JSON into memory",
-      "Zoom stutters — thousands of raw polygons re-render every frame",
+    tagline: "Simple · cacheable",
+    hint: "Easy to host anywhere. Once cached, files load quickly - on deploy you may see GeoJSON feel faster because the browser reuses cached responses with fewer round-trips than many tile requests.",
+    bestFor: [
+      "Small datasets and quick prototypes",
+      "Any static host — no byte-range server setup",
+      "Repeat visits when files are browser/CDN cached",
+    ],
+    notIdealFor: [
+      "Large admin boundaries — full download + JSON parse on first load",
+      "Zoom and pan — all raw polygons re-render every frame",
+      "Scaling to country → state → district level data",
     ],
   },
   pmtiles: {
     label: "PMTiles",
-    tagline: "Byte-range · on demand",
-    hint: "MapLibre requests only the byte ranges it needs from each archive. Tiles are pre-built — no full-file download, no JSON parsing, data streams as you pan and zoom.",
-    points: [
-      "HTTP Range requests fetch small chunks",
-      "Pre-tiled & simplified per zoom level",
-      "Smooth zoom — only visible tiles are rendered",
+    tagline: "Tiled · scalable",
+    hint: "Built for large vector maps. Streams only visible tiles via HTTP range requests - better on first load and at detail zoom, but needs a server that supports byte-range serving.",
+    bestFor: [
+      "Large datasets split across zoom levels",
+      "First visit — fetches only what is on screen",
+      "Smooth zoom — pre-simplified tiles per zoom level",
+    ],
+    notIdealFor: [
+      "Requires byte-range HTTP support (Worker + R2, etc.)",
+      "Extra build step with tippecanoe",
+      "More network requests than one cached GeoJSON file",
     ],
   },
 };
@@ -45,22 +67,45 @@ export function worldMeta(format) {
 export const DETAIL_MAPS = {
   NPL: {
     source: "nepal",
-    sourceLayer: "districts",
-    fillLayer: "nepal-districts-fill",
+    fillLayer: "nepal-provinces-fill",
     labelKey: "DISTRICT",
     fallbackLabel: "Province",
+    minZoom: DETAIL_ZOOM,
   },
   IND: {
     source: "india",
-    sourceLayer: "districts",
-    fillLayer: "india-districts-fill",
+    fillLayer: "india-states-fill",
     labelKey: "NAME_1",
     fallbackLabel: "State",
+    minZoom: DETAIL_ZOOM,
   },
 };
 
-export function detailSourceLayer(format) {
-  return format === "pmtiles" ? "districts" : null;
+export const NEPAL_DISTRICT_MAP = {
+  source: "nepal-districts",
+  fillLayer: "nepal-districts-fill",
+  labelKey: "DISTRICT",
+  fallbackLabel: "District",
+  minZoom: NEPAL_DISTRICT_ZOOM,
+};
+
+export const NEPAL_LOCAL_MAP = {
+  source: "nepal-local",
+  fillLayer: "nepal-local-fill",
+  labelKey: "locallevel_name",
+  fallbackLabel: "Local unit",
+  minZoom: NEPAL_LOCAL_ZOOM,
+};
+
+export function sourceLayerFor(sourceId, format) {
+  if (format !== "pmtiles") return null;
+  const layers = {
+    nepal: "provinces",
+    "nepal-districts": "districts",
+    "nepal-local": "locallevels",
+    india: "districts",
+  };
+  return layers[sourceId] ?? null;
 }
 
 export function countryName(props) {
@@ -102,33 +147,56 @@ export function featureStateTarget(source, sourceLayer, id) {
   return target;
 }
 
-function detailFillOpacity(normal, hover) {
+/** Fade in between appearZoom and peakZoom; stays visible above (no fade-out). */
+function layerFillOpacity(appearZoom, peakZoom, normal, hover) {
   const hoverState = ["boolean", ["feature-state", "hover"], false];
+  const faint = ["case", hoverState, hover * 0.35, normal * 0.35];
+  const mid = ["case", hoverState, hover * 0.7, normal * 0.7];
+  const full = ["case", hoverState, hover, normal];
+  const peak = ["case", hoverState, hover * 1.25, normal * 1.25];
+  const midZoom = (appearZoom + peakZoom) / 2;
   return [
     "interpolate",
     ["linear"],
     ["zoom"],
-    DETAIL_ZOOM - 0.5,
+    appearZoom - 0.25,
     0,
-    DETAIL_ZOOM,
-    ["case", hoverState, hover, normal],
-    DETAIL_ZOOM + 2,
-    ["case", hoverState, hover * 1.5, normal * 1.5],
+    appearZoom,
+    faint,
+    midZoom,
+    mid,
+    peakZoom,
+    full,
+    peakZoom + 2,
+    peak,
   ];
 }
 
-function detailLineOpacity(base) {
+function layerLineOpacity(appearZoom, peakZoom, base) {
+  const midZoom = (appearZoom + peakZoom) / 2;
   return [
     "interpolate",
     ["linear"],
     ["zoom"],
-    DETAIL_ZOOM - 0.5,
+    appearZoom - 0.25,
     0,
-    DETAIL_ZOOM,
+    appearZoom,
+    base * 0.25,
+    midZoom,
+    base * 0.6,
+    peakZoom,
     base,
-    DETAIL_ZOOM + 2,
-    base * 1.5,
+    peakZoom + 2,
+    base * 1.25,
   ];
+}
+
+function detailFillOpacity(minZoom, normal, hover) {
+  return layerFillOpacity(minZoom, minZoom + 0.5, normal, hover);
+}
+
+function detailLineOpacity(minZoom, base) {
+  return layerLineOpacity(minZoom, minZoom + 0.5, base);
 }
 
 function vectorLayer(source, sourceLayer, extra = {}) {
@@ -267,15 +335,17 @@ function worldLayers(format) {
   ];
 }
 
-export function detailLayers(format) {
-  const detailSl = format === "pmtiles" ? "districts" : null;
+function nepalProvinceLayers(format) {
+  const sl = sourceLayerFor("nepal", format);
+  const appear = DETAIL_ZOOM;
+  const peak = DETAIL_ZOOM + 0.5;
 
   return [
     {
-      id: "nepal-districts-fill",
+      id: "nepal-provinces-fill",
       type: "fill",
-      ...vectorLayer("nepal", detailSl),
-      minzoom: DETAIL_ZOOM,
+      ...vectorLayer("nepal", sl),
+      minzoom: appear,
       paint: {
         "fill-color": [
           "case",
@@ -283,56 +353,44 @@ export function detailLayers(format) {
           "#3b82f6",
           "#2563eb",
         ],
-        "fill-opacity": detailFillOpacity(0.08, 0.25),
+        "fill-opacity": layerFillOpacity(appear, peak, 0.08, 0.25),
       },
     },
     {
-      id: "nepal-district-glow",
+      id: "nepal-provinces-glow",
       type: "line",
-      ...vectorLayer("nepal", detailSl),
-      minzoom: DETAIL_ZOOM,
+      ...vectorLayer("nepal", sl),
+      minzoom: appear,
       paint: {
         "line-color": "#93c5fd",
-        "line-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          4,
-          0.5,
-          8,
-          1.5,
-          12,
-          3,
-        ],
-        "line-opacity": detailLineOpacity(0.3),
+        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 8, 1.5, 12, 3],
+        "line-opacity": layerLineOpacity(appear, peak, 0.3),
       },
     },
     {
-      id: "nepal-districts",
+      id: "nepal-provinces-line",
       type: "line",
-      ...vectorLayer("nepal", detailSl),
-      minzoom: DETAIL_ZOOM,
+      ...vectorLayer("nepal", sl),
+      minzoom: appear,
       paint: {
         "line-color": "#2563eb",
-        "line-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          4,
-          0.6,
-          8,
-          1.2,
-          12,
-          2.5,
-        ],
-        "line-opacity": detailLineOpacity(0.9),
+        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.6, 8, 1.2, 12, 2.5],
+        "line-opacity": layerLineOpacity(appear, peak, 0.9),
       },
     },
+  ];
+}
+
+function indiaStateLayers(format) {
+  const sl = sourceLayerFor("india", format);
+  const z = DETAIL_ZOOM;
+
+  return [
     {
-      id: "india-districts-fill",
+      id: "india-states-fill",
       type: "fill",
-      ...vectorLayer("india", detailSl),
-      minzoom: DETAIL_ZOOM,
+      ...vectorLayer("india", sl),
+      minzoom: z,
       paint: {
         "fill-color": [
           "case",
@@ -340,49 +398,163 @@ export function detailLayers(format) {
           "#34d399",
           "#059669",
         ],
-        "fill-opacity": detailFillOpacity(0.08, 0.25),
+        "fill-opacity": detailFillOpacity(z, 0.08, 0.25),
       },
     },
     {
-      id: "india-district-glow",
+      id: "india-states-glow",
       type: "line",
-      ...vectorLayer("india", detailSl),
-      minzoom: DETAIL_ZOOM,
+      ...vectorLayer("india", sl),
+      minzoom: z,
       paint: {
         "line-color": "#6ee7b7",
-        "line-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          4,
-          0.5,
-          8,
-          1.5,
-          12,
-          3,
-        ],
-        "line-opacity": detailLineOpacity(0.3),
+        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 8, 1.5, 12, 3],
+        "line-opacity": detailLineOpacity(z, 0.3),
       },
     },
     {
-      id: "india-districts",
+      id: "india-states-line",
       type: "line",
-      ...vectorLayer("india", detailSl),
-      minzoom: DETAIL_ZOOM,
+      ...vectorLayer("india", sl),
+      minzoom: z,
       paint: {
         "line-color": "#047857",
-        "line-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          4,
-          0.6,
-          8,
-          1.2,
-          12,
-          2.5,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.6, 8, 1.2, 12, 2.5],
+        "line-opacity": detailLineOpacity(z, 0.9),
+      },
+    },
+  ];
+}
+
+export function detailLayers(format) {
+  return [...nepalProvinceLayers(format), ...indiaStateLayers(format)];
+}
+
+export function nepalDistrictSources(format) {
+  if (format === "geojson") {
+    return {
+      "nepal-districts": {
+        type: "geojson",
+        data: "/geojsons/nepal-districts.geojson",
+        promoteId: "id",
+      },
+    };
+  }
+  return {
+    "nepal-districts": {
+      type: "vector",
+      url: "pmtiles:///nepal-districts.pmtiles",
+      promoteId: "id",
+    },
+  };
+}
+
+export function nepalDistrictLayers(format) {
+  const sl = sourceLayerFor("nepal-districts", format);
+  const appear = NEPAL_DISTRICT_ZOOM;
+  const peak = NEPAL_DISTRICT_FULL_ZOOM;
+
+  return [
+    {
+      id: "nepal-districts-fill",
+      type: "fill",
+      ...vectorLayer("nepal-districts", sl),
+      minzoom: appear,
+      paint: {
+        "fill-color": [
+          "case",
+          ["boolean", ["feature-state", "hover"], false],
+          "#fbbf24",
+          "#d97706",
         ],
-        "line-opacity": detailLineOpacity(0.9),
+        "fill-opacity": layerFillOpacity(appear, peak, 0.12, 0.3),
+      },
+    },
+    {
+      id: "nepal-districts-glow",
+      type: "line",
+      ...vectorLayer("nepal-districts", sl),
+      minzoom: appear,
+      paint: {
+        "line-color": "#fde68a",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.4, 8, 1.2, 14, 2.5],
+        "line-opacity": layerLineOpacity(appear, peak, 0.35),
+      },
+    },
+    {
+      id: "nepal-districts-line",
+      type: "line",
+      ...vectorLayer("nepal-districts", sl),
+      minzoom: appear,
+      paint: {
+        "line-color": "#b45309",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.5, 8, 1, 14, 2],
+        "line-opacity": layerLineOpacity(appear, peak, 0.9),
+      },
+    },
+  ];
+}
+
+export function nepalLocalSources(format) {
+  if (format === "geojson") {
+    return {
+      "nepal-local": {
+        type: "geojson",
+        data: "/geojsons/nepal-local.geojson",
+        promoteId: "locallevel_fullcode",
+      },
+    };
+  }
+  return {
+    "nepal-local": {
+      type: "vector",
+      url: "pmtiles:///nepal-local.pmtiles",
+      promoteId: "locallevel_fullcode",
+    },
+  };
+}
+
+export function nepalLocalLayers(format) {
+  const sl = sourceLayerFor("nepal-local", format);
+  const appear = NEPAL_LOCAL_ZOOM;
+  const peak = NEPAL_LOCAL_FULL_ZOOM;
+
+  return [
+    {
+      id: "nepal-local-fill",
+      type: "fill",
+      ...vectorLayer("nepal-local", sl),
+      minzoom: appear,
+      paint: {
+        "fill-color": [
+          "case",
+          ["boolean", ["feature-state", "hover"], false],
+          "#e879f9",
+          "#c026d3",
+        ],
+        "fill-opacity": layerFillOpacity(appear, peak, 0.1, 0.28),
+      },
+    },
+    {
+      id: "nepal-local-glow",
+      type: "line",
+      ...vectorLayer("nepal-local", sl),
+      minzoom: appear,
+      paint: {
+        "line-color": "#f0abfc",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 12, 1.2, 16, 2.5],
+        "line-opacity": layerLineOpacity(appear, peak, 0.35),
+      },
+    },
+    {
+      id: "nepal-local-line",
+      type: "line",
+      ...vectorLayer("nepal-local", sl),
+      minzoom: appear,
+      paint: {
+        "line-color": "#a21caf",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.5, 12, 1, 16, 2],
+        "line-opacity": layerLineOpacity(appear, peak, 0.9),
       },
     },
   ];
