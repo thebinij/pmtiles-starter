@@ -2,13 +2,14 @@
 
 /** @typedef {{ format: MapFormat, networkBytes: number, heapBytes: number | null, heapAvailable: boolean, filesLoaded: number, estimated: boolean }} MapStats */
 
-/** On-disk sizes — MapLibre fetches GeoJSON inside a Web Worker (invisible to Performance API). */
 export const GEOJSON_FILE_SIZES = {
   "/geojsons/world.geojson": 3083490,
   "/geojsons/nepal.geojson": 3021312,
   "/geojsons/nepal-districts.geojson": 1226220,
   "/geojsons/nepal-local.geojson": 3623780,
   "/geojsons/india_state.geojson": 22967643,
+  "/geojsons/usa-states.geojson": 89263,
+  "/geojsons/usa-counties.geojson": 2962196,
 };
 
 /**

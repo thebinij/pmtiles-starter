@@ -12,6 +12,8 @@ const tiles = [
   "nepal-districts.pmtiles",
   "nepal-local.pmtiles",
   "india.pmtiles",
+  "usa-states.pmtiles",
+  "usa-counties.pmtiles",
 ];
 
 console.log(`Uploading tiles to R2 bucket: ${bucket}`);

@@ -11,7 +11,9 @@
     "tiles:nepal-districts": "tippecanoe -o public/nepal-districts.pmtiles --force --layer=districts --generate-ids geojsons/nepal-districts.geojson",
     "tiles:nepal-local": "tippecanoe -o public/nepal-local.pmtiles --force --layer=locallevels --generate-ids geojsons/nepal-local.geojson",
     "tiles:india": "tippecanoe -o public/india.pmtiles --force --layer=districts --generate-ids geojsons/india_state.geojson",
-    "tiles": "npm run tiles:nepal && npm run tiles:nepal-districts && npm run tiles:nepal-local && npm run tiles:india",
+    "tiles:usa-states": "tippecanoe -o public/usa-states.pmtiles --force --layer=states --generate-ids -z6 -S 8 geojsons/usa-states.geojson",
+    "tiles:usa-counties": "tippecanoe -o public/usa-counties.pmtiles --force --layer=counties --use-attribute-for-id=GEOID -z10 -S 10 --coalesce-densest-as-needed geojsons/usa-counties.geojson",
+    "tiles": "npm run tiles:nepal && npm run tiles:nepal-districts && npm run tiles:nepal-local && npm run tiles:india && npm run tiles:usa-states && npm run tiles:usa-counties",
     "upload:tiles": "node scripts/upload-tiles.mjs",
     "deploy": "npm run build && wrangler deploy"
   },

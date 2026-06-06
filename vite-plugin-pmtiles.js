@@ -49,12 +49,16 @@ function pmtilesMiddleware(rootDir) {
 function geojsonMiddleware() {
   return (req, res, next) => {
     const url = req.url?.split("?")[0] ?? "";
-    if (!url.startsWith("/geojsons/") || !url.endsWith(".geojson")) return next();
+    if (!url.startsWith("/geojsons/")) return next();
+    if (!url.endsWith(".geojson") && !url.endsWith(".json")) return next();
 
     const filePath = path.join(geojsonDir, path.basename(url));
     if (!fs.existsSync(filePath)) return next();
 
-    res.setHeader("Content-Type", "application/geo+json");
+    res.setHeader(
+      "Content-Type",
+      url.endsWith(".json") ? "application/json" : "application/geo+json",
+    );
     res.setHeader("Cache-Control", "no-cache");
     fs.createReadStream(filePath).pipe(res);
   };

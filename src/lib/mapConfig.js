@@ -1,27 +1,25 @@
-/** Nepal provinces (nepal.geojson) — first detail level */
 export const DETAIL_ZOOM = 4;
-
-/** Nepal districts (nepal-districts.geojson) — start fading in */
 export const NEPAL_DISTRICT_ZOOM = 5;
-
-/** Nepal districts fully visible */
 export const NEPAL_DISTRICT_FULL_ZOOM = 6;
-
-/** Nepal local units (nepal-local.geojson) — start fading in */
 export const NEPAL_LOCAL_ZOOM = 7;
-
-/** Nepal local units fully visible */
 export const NEPAL_LOCAL_FULL_ZOOM = 8;
+export const USA_STATE_ZOOM = 1.8;
+export const USA_COUNTY_ZOOM = 4.5;
+export const USA_COUNTY_FULL_ZOOM = 5;
 
-/** Bounds [sw, ne] used to fit the full world inside the map panel */
+export const USA_DETAIL_BOUNDS = [
+  [171.09509, 25.120779],
+  [-66.979601, 71.351633],
+];
+
+export const USA_DETAIL_CENTER = [-110.2471, 45.3781];
+
 export const WORLD_BOUNDS = [
   [-175, -55],
   [175, 78],
 ];
 
 export const WORLD_FIT_PADDING = 20;
-
-/** Stay below detail zoom so overlays stay hidden on the world overview */
 export const WORLD_MAX_ZOOM = DETAIL_ZOOM - 0.1;
 
 export const FORMAT_META = {
@@ -79,6 +77,22 @@ export const DETAIL_MAPS = {
     fallbackLabel: "State",
     minZoom: DETAIL_ZOOM,
   },
+  USA: {
+    source: "usa-states",
+    fillLayer: "usa-states-fill",
+    labelKey: "name",
+    fallbackLabel: "State",
+    minZoom: USA_STATE_ZOOM,
+  },
+};
+
+export const USA_COUNTY_MAP = {
+  source: "usa-counties",
+  fillLayer: "usa-counties-fill",
+  labelKey: "NAME",
+  fallbackLabel: "County",
+  minZoom: USA_COUNTY_ZOOM,
+  parent: { prop: "STATEFP", lookup: "us-state-fips", fips: true },
 };
 
 export const NEPAL_DISTRICT_MAP = {
@@ -87,6 +101,7 @@ export const NEPAL_DISTRICT_MAP = {
   labelKey: "DISTRICT",
   fallbackLabel: "District",
   minZoom: NEPAL_DISTRICT_ZOOM,
+  parent: { prop: "PROVINCE", lookup: "nepal-provinces" },
 };
 
 export const NEPAL_LOCAL_MAP = {
@@ -95,7 +110,75 @@ export const NEPAL_LOCAL_MAP = {
   labelKey: "locallevel_name",
   fallbackLabel: "Local unit",
   minZoom: NEPAL_LOCAL_ZOOM,
+  parent: "district",
 };
+
+export const PARENT_LOOKUPS = {
+  "us-state-fips": {
+    "01": "Alabama",
+    "02": "Alaska",
+    "04": "Arizona",
+    "05": "Arkansas",
+    "06": "California",
+    "08": "Colorado",
+    "09": "Connecticut",
+    "10": "Delaware",
+    "11": "District of Columbia",
+    "12": "Florida",
+    "13": "Georgia",
+    "15": "Hawaii",
+    "16": "Idaho",
+    "17": "Illinois",
+    "18": "Indiana",
+    "19": "Iowa",
+    "20": "Kansas",
+    "21": "Kentucky",
+    "22": "Louisiana",
+    "23": "Maine",
+    "24": "Maryland",
+    "25": "Massachusetts",
+    "26": "Michigan",
+    "27": "Minnesota",
+    "28": "Mississippi",
+    "29": "Missouri",
+    "30": "Montana",
+    "31": "Nebraska",
+    "32": "Nevada",
+    "33": "New Hampshire",
+    "34": "New Jersey",
+    "35": "New Mexico",
+    "36": "New York",
+    "37": "North Carolina",
+    "38": "North Dakota",
+    "39": "Ohio",
+    "40": "Oklahoma",
+    "41": "Oregon",
+    "42": "Pennsylvania",
+    "44": "Rhode Island",
+    "45": "South Carolina",
+    "46": "South Dakota",
+    "47": "Tennessee",
+    "48": "Texas",
+    "49": "Utah",
+    "50": "Vermont",
+    "51": "Virginia",
+    "53": "Washington",
+    "54": "West Virginia",
+    "55": "Wisconsin",
+    "56": "Wyoming",
+    "72": "Puerto Rico",
+  },
+};
+
+export const DYNAMIC_PARENT_LOOKUPS = {
+  "nepal-provinces": {
+    source: "nepal",
+    key: "Province",
+    label: "DISTRICT",
+  },
+};
+
+const dynamicLookupCache = new Map();
 
 export function sourceLayerFor(sourceId, format) {
   if (format !== "pmtiles") return null;
@@ -104,6 +187,8 @@ export function sourceLayerFor(sourceId, format) {
     "nepal-districts": "districts",
     "nepal-local": "locallevels",
     india: "districts",
+    "usa-states": "states",
+    "usa-counties": "counties",
   };
   return layers[sourceId] ?? null;
 }
@@ -123,15 +208,91 @@ export function countryName(props) {
   );
 }
 
+export function countryCode(props) {
+  return props.adm0_a3 || props.ADM0_A3;
+}
+
+export function isUsaCountry(props) {
+  const code = countryCode(props);
+  const formal = props.formal_en || props.FORMAL_EN;
+  return code === "USA" || formal === "United States of America";
+}
+
 export function hasDetailMap(props) {
-  const code = props.adm0_a3 || props.ADM0_A3;
+  const code = countryCode(props);
   const formal = props.formal_en || props.FORMAL_EN;
   return (
     code === "NPL" ||
     code === "IND" ||
+    code === "USA" ||
     formal === "Nepal" ||
-    formal === "India"
+    formal === "India" ||
+    formal === "United States of America"
   );
+}
+
+export function featureBounds(feature) {
+  const coords = [];
+
+  function walk(ring) {
+    if (typeof ring[0] === "number") {
+      coords.push(ring);
+      return;
+    }
+    for (const part of ring) walk(part);
+  }
+
+  walk(feature.geometry.coordinates);
+
+  const lats = coords.map((c) => c[1]);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+
+  const rawLons = coords.map((c) => c[0]);
+  let minLon = Math.min(...rawLons);
+  let maxLon = Math.max(...rawLons);
+
+  if (maxLon - minLon > 180) {
+    const normLons = rawLons.map((lon) => (lon < 0 ? lon + 360 : lon));
+    minLon = Math.min(...normLons);
+    maxLon = Math.max(...normLons);
+  }
+
+  const west = minLon > 180 ? minLon - 360 : minLon;
+  const east = maxLon > 180 ? maxLon - 360 : maxLon;
+
+  return [
+    [west, minLat],
+    [east, maxLat],
+  ];
+}
+
+export function countryClickBounds(feature, props) {
+  return isUsaCountry(props) ? USA_DETAIL_BOUNDS : featureBounds(feature);
+}
+
+export function countryFitOptions(props) {
+  return {
+    padding: 60,
+    maxZoom: countryCode(props) === "NPL" ? 7.5 : 6.5,
+  };
+}
+
+export function usaCountryCamera(map) {
+  const { clientWidth: w, clientHeight: h } = map.getContainer();
+  const aspect = w / h;
+  const lng = USA_DETAIL_CENTER[0] + (aspect - 2.2) * 3;
+  const lat = USA_DETAIL_CENTER[1] - Math.max(0, aspect - 2.5) * 2;
+
+  return {
+    center: [lng, lat],
+    zoom: USA_STATE_ZOOM,
+  };
+}
+
+export function countryClickZoom(props) {
+  if (!hasDetailMap(props)) return null;
+  return isUsaCountry(props) ? USA_STATE_ZOOM : DETAIL_ZOOM;
 }
 
 export function featureLabel(feature, detail) {
@@ -141,13 +302,97 @@ export function featureLabel(feature, detail) {
   return detail.fallbackLabel;
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export function popupHtml(title, subtitle) {
+  const safeTitle = escapeHtml(title);
+  if (!subtitle) return `<strong>${safeTitle}</strong>`;
+  return `<strong>${safeTitle}</strong><br><span class="popup-sub">${escapeHtml(subtitle)}</span>`;
+}
+
+function buildDynamicLookup(map, format, lookupId) {
+  const spec = DYNAMIC_PARENT_LOOKUPS[lookupId];
+  if (!spec || !map.getSource(spec.source)) return {};
+
+  const sourceLayer = sourceLayerFor(spec.source, format);
+  const query = sourceLayer ? { sourceLayer } : {};
+  const table = {};
+
+  for (const feature of map.querySourceFeatures(spec.source, query)) {
+    const props = feature.properties;
+    const key = props[spec.key];
+    const label = props[spec.label];
+    if (key != null && label) table[key] = label;
+  }
+
+  return table;
+}
+
+function getDynamicLookup(map, format, lookupId) {
+  const cacheKey = `${format}:${lookupId}`;
+  if (!dynamicLookupCache.has(cacheKey)) {
+    dynamicLookupCache.set(cacheKey, buildDynamicLookup(map, format, lookupId));
+  }
+  return dynamicLookupCache.get(cacheKey);
+}
+
+export function clearDynamicParentLookups() {
+  dynamicLookupCache.clear();
+}
+
+export function resolveParentLabel(map, format, props, parent) {
+  if (!parent) return null;
+
+  if (typeof parent === "string") {
+    const value = props[parent];
+    return value == null || value === "" ? null : String(value);
+  }
+
+  let raw = props[parent.prop];
+  if (raw == null && parent.fips && props.GEOID) {
+    raw = String(props.GEOID).slice(0, 2);
+  }
+  if (raw == null || raw === "") return null;
+
+  const key = parent.fips ? String(raw).padStart(2, "0") : raw;
+
+  if (parent.lookup && PARENT_LOOKUPS[parent.lookup]) {
+    return PARENT_LOOKUPS[parent.lookup][key] ?? null;
+  }
+
+  if (parent.lookup && DYNAMIC_PARENT_LOOKUPS[parent.lookup]) {
+    const table = getDynamicLookup(map, format, parent.lookup);
+    return table[key] ?? null;
+  }
+
+  return String(raw);
+}
+
+export function regionPopupHtml(map, format, feature, detail) {
+  const subtitle = resolveParentLabel(
+    map,
+    format,
+    feature.properties,
+    detail.parent,
+  );
+  return popupHtml(featureLabel(feature, detail), subtitle);
+}
+
+export function countryPopupHtml(props) {
+  return popupHtml(countryName(props));
+}
+
 export function featureStateTarget(source, sourceLayer, id) {
   const target = { source, id };
   if (sourceLayer) target.sourceLayer = sourceLayer;
   return target;
 }
 
-/** Fade in between appearZoom and peakZoom; stays visible above (no fade-out). */
 function layerFillOpacity(appearZoom, peakZoom, normal, hover) {
   const hoverState = ["boolean", ["feature-state", "hover"], false];
   const faint = ["case", hoverState, hover * 0.35, normal * 0.35];
@@ -233,6 +478,10 @@ export function detailSources(format) {
         data: "/geojsons/india_state.geojson",
         promoteId: "ID_1",
       },
+      "usa-states": {
+        type: "geojson",
+        data: "/geojsons/usa-states.geojson",
+      },
     };
   }
   return {
@@ -245,6 +494,11 @@ export function detailSources(format) {
       type: "vector",
       url: "pmtiles:///india.pmtiles",
       promoteId: "ID_1",
+    },
+    "usa-states": {
+      type: "vector",
+      url: "pmtiles:///usa-states.pmtiles",
+      promoteId: "name",
     },
   };
 }
@@ -426,8 +680,123 @@ function indiaStateLayers(format) {
   ];
 }
 
+function usaStateLayers(format) {
+  const sl = sourceLayerFor("usa-states", format);
+  const z = USA_STATE_ZOOM;
+  const hoverState = ["boolean", ["feature-state", "hover"], false];
+
+  return [
+    {
+      id: "usa-states-fill",
+      type: "fill",
+      ...vectorLayer("usa-states", sl),
+      minzoom: z,
+      paint: {
+        "fill-color": [
+          "case",
+          hoverState,
+          "#f87171",
+          "#dc2626",
+        ],
+        "fill-opacity": ["case", hoverState, 0.3, 0.12],
+      },
+    },
+    {
+      id: "usa-states-glow",
+      type: "line",
+      ...vectorLayer("usa-states", sl),
+      minzoom: z,
+      paint: {
+        "line-color": "#fca5a5",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 1.8, 0.6, 4, 1, 8, 1.5, 12, 3],
+        "line-opacity": 0.55,
+      },
+    },
+    {
+      id: "usa-states-line",
+      type: "line",
+      ...vectorLayer("usa-states", sl),
+      minzoom: z,
+      paint: {
+        "line-color": "#b91c1c",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 1.8, 0.8, 4, 1.2, 8, 1.8, 12, 2.5],
+        "line-opacity": 0.95,
+      },
+    },
+  ];
+}
+
 export function detailLayers(format) {
-  return [...nepalProvinceLayers(format), ...indiaStateLayers(format)];
+  return [
+    ...nepalProvinceLayers(format),
+    ...indiaStateLayers(format),
+    ...usaStateLayers(format),
+  ];
+}
+
+export function usaCountySources(format) {
+  if (format === "geojson") {
+    return {
+      "usa-counties": {
+        type: "geojson",
+        data: "/geojsons/usa-counties.geojson",
+        promoteId: "GEOID",
+      },
+    };
+  }
+  return {
+    "usa-counties": {
+      type: "vector",
+      url: "pmtiles:///usa-counties.pmtiles",
+      promoteId: "GEOID",
+    },
+  };
+}
+
+export function usaCountyLayers(format) {
+  const sl = sourceLayerFor("usa-counties", format);
+  const appear = USA_COUNTY_ZOOM;
+  const peak = USA_COUNTY_FULL_ZOOM;
+
+  return [
+    {
+      id: "usa-counties-fill",
+      type: "fill",
+      ...vectorLayer("usa-counties", sl),
+      minzoom: appear,
+      paint: {
+        "fill-color": [
+          "case",
+          ["boolean", ["feature-state", "hover"], false],
+          "#fbbf24",
+          "#d97706",
+        ],
+        "fill-opacity": layerFillOpacity(appear, peak, 0.1, 0.28),
+      },
+    },
+    {
+      id: "usa-counties-glow",
+      type: "line",
+      ...vectorLayer("usa-counties", sl),
+      minzoom: appear,
+      paint: {
+        "line-color": "#fde68a",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.4, 8, 1.2, 14, 2.5],
+        "line-opacity": layerLineOpacity(appear, peak, 0.35),
+      },
+    },
+    {
+      id: "usa-counties-line",
+      type: "line",
+      ...vectorLayer("usa-counties", sl),
+      minzoom: appear,
+      paint: {
+        "line-color": "#b45309",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.5, 8, 1, 14, 2],
+        "line-opacity": layerLineOpacity(appear, peak, 0.9),
+      },
+    },
+  ];
 }
 
 export function nepalDistrictSources(format) {
