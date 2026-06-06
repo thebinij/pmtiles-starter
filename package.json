@@ -1,0 +1,27 @@
+{
+  "name": "pmtiles-starter",
+  "description": "Example project showing how to convert GeoJSON to PMTiles and use them with MapLibre GL instead of raw GeoJSON.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tiles:nepal": "tippecanoe -o public/nepal.pmtiles --layer=districts --generate-ids geojsons/nepal.geojson",
+    "tiles:india": "tippecanoe -o public/india.pmtiles --layer=districts --generate-ids geojsons/india_state.geojson",
+    "tiles": "npm run tiles:nepal && npm run tiles:india",
+    "upload:tiles": "node scripts/upload-tiles.mjs",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5.6.0",
+    "pmtiles": "^4.4.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "svelte": "^5.33.0",
+    "vite": "^6.3.5",
+    "wrangler": "^4.14.0"
+  }
+
+}

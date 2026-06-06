@@ -1,0 +1,12 @@
+name = "worldmap"
+main = "worker/index.js"
+compatibility_date = "2024-11-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[r2_buckets]]
+binding = "TILES"
+bucket_name = "worldmap-tiles"
