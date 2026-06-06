@@ -7,7 +7,7 @@ export const GEOJSON_FILE_SIZES = {
   "/geojsons/nepal.geojson": 3021312,
   "/geojsons/nepal-districts.geojson": 1226220,
   "/geojsons/nepal-local.geojson": 3623780,
-  "/geojsons/india_state.geojson": 22967643,
+  "/geojsons/india_state.geojson": 1504133,
   "/geojsons/usa-states.geojson": 89263,
   "/geojsons/usa-counties.geojson": 2962196,
 };

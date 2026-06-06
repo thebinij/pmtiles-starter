@@ -4,18 +4,6 @@
   import { Protocol } from "pmtiles";
   import "maplibre-gl/dist/maplibre-gl.css";
   import {
-    DETAIL_MAPS,
-    DETAIL_ZOOM,
-    NEPAL_DISTRICT_MAP,
-    NEPAL_DISTRICT_ZOOM,
-    NEPAL_DISTRICT_FULL_ZOOM,
-    NEPAL_LOCAL_MAP,
-    NEPAL_LOCAL_ZOOM,
-    NEPAL_LOCAL_FULL_ZOOM,
-    USA_COUNTY_MAP,
-    USA_COUNTY_ZOOM,
-    USA_COUNTY_FULL_ZOOM,
-    USA_STATE_ZOOM,
     WORLD_BOUNDS,
     WORLD_FIT_PADDING,
     WORLD_MAX_ZOOM,
@@ -23,24 +11,13 @@
     countryClickBounds,
     countryClickZoom,
     countryFitOptions,
+    countryPopupHtml,
     isUsaCountry,
     usaCountryCamera,
-    clearDynamicParentLookups,
-    countryPopupHtml,
-    detailLayers,
-    detailSources,
-    featureBounds,
     featureStateTarget,
-    regionPopupHtml,
-    nepalDistrictLayers,
-    nepalDistrictSources,
-    nepalLocalLayers,
-    nepalLocalSources,
-    usaCountyLayers,
-    usaCountySources,
-    sourceLayerFor,
     worldMeta,
   } from "./mapConfig.js";
+  import { createOverlayManager } from "./overlayManager.js";
   import { collectMapStats, createGeojsonLoadTracker } from "./mapStats.js";
 
   /** @type {'geojson' | 'pmtiles'} */
@@ -52,17 +29,10 @@
   let mapContainer;
   let map;
   let popup;
+  /** @type {ReturnType<typeof createOverlayManager> | null} */
+  let overlayManager = null;
   let hoveredCountryId = null;
   let hoveredRegion = null;
-  let viewMode = "world";
-  let detailLoaded = false;
-  let nepalDistrictsLoaded = false;
-  let nepalLocalLoaded = false;
-  let usaCountiesLoaded = false;
-  let detailHandlersBound = false;
-  let nepalDistrictHandlersBound = false;
-  let nepalLocalHandlersBound = false;
-  let usaCountyHandlersBound = false;
 
   let pointerLng = $state(null);
   let pointerLat = $state(null);
@@ -97,11 +67,6 @@
     onStats(collectMapStats(format, geojsonTracker));
   }
 
-  function addSourceTracked(id, source) {
-    trackGeojsonSource(source);
-    if (!map.getSource(id)) map.addSource(id, source);
-  }
-
   function clearCountryHover() {
     if (hoveredCountryId === null || !map) return;
     map.setFeatureState(
@@ -124,15 +89,8 @@
     if (map) map.getCanvas().style.cursor = "";
   }
 
-  function atZoom(threshold) {
-    return map.getZoom() >= threshold;
-  }
-
-  function showDetailOverlays() {
-    return (
-      atZoom(DETAIL_ZOOM) ||
-      (viewMode === "country" && atZoom(USA_STATE_ZOOM))
-    );
+  function inDetailView() {
+    return overlayManager?.inDetailView() ?? false;
   }
 
   function fitWorldView(duration = 0) {
@@ -153,166 +111,9 @@
     map.easeTo({ ...camera, duration: 500, essential: true });
   }
 
-  function addLayers(sources, layers) {
-    if (!map?.isStyleLoaded()) return;
-    for (const [id, source] of Object.entries(sources)) {
-      addSourceTracked(id, source);
-    }
-    for (const layer of layers) {
-      if (!map.getLayer(layer.id)) map.addLayer(layer);
-    }
-  }
-
-  function bindRegionHandler(detail, options = {}) {
-    const { fillLayer, source, minZoom } = detail;
-    const {
-      skipWhenDistrictZoom = false,
-      skipWhenLocalZoom = false,
-      skipWhenCountyZoom = false,
-      onClick,
-    } = options;
-
-    map.on("mousemove", fillLayer, (e) => {
-      if (map.getZoom() < minZoom || !e.features?.length) return;
-      if (skipWhenDistrictZoom && atZoom(NEPAL_DISTRICT_FULL_ZOOM)) return;
-      if (skipWhenLocalZoom && atZoom(NEPAL_LOCAL_FULL_ZOOM)) return;
-      if (skipWhenCountyZoom && atZoom(USA_COUNTY_FULL_ZOOM)) return;
-      clearCountryHover();
-      map.getCanvas().style.cursor = "pointer";
-
-      const feature = e.features[0];
-      const target = featureStateTarget(
-        source,
-        sourceLayerFor(source, format),
-        feature.id,
-      );
-      if (
-        hoveredRegion &&
-        (hoveredRegion.id !== feature.id || hoveredRegion.source !== source)
-      ) {
-        clearRegionHover();
-      }
-      if (feature.id !== undefined) {
-        hoveredRegion = target;
-        map.setFeatureState(target, { hover: true });
-      }
-
-      popup
-        .setLngLat(e.lngLat)
-        .setHTML(regionPopupHtml(map, format, feature, detail))
-        .addTo(map);
-    });
-
-    map.on("mouseleave", fillLayer, () => {
-      dismissHoverUI();
-    });
-
-    if (onClick) {
-      map.on("click", fillLayer, (e) => {
-        if (map.getZoom() < minZoom || !e.features?.length) return;
-        dismissHoverUI();
-        onClick(e.features[0]);
-      });
-    }
-  }
-
-  function bindDetailHandlers() {
-    if (detailHandlersBound) return;
-    detailHandlersBound = true;
-
-    for (const detail of Object.values(DETAIL_MAPS)) {
-      const options = {};
-
-      if (detail.source === "nepal") {
-        options.skipWhenDistrictZoom = true;
-        options.skipWhenLocalZoom = true;
-        options.onClick = (feature) => {
-          ensureNepalDistrictsLoaded();
-          zoomToBounds(
-            featureBounds(feature),
-            NEPAL_DISTRICT_FULL_ZOOM,
-            8,
-          );
-        };
-      } else if (detail.source === "usa-states") {
-        options.skipWhenCountyZoom = true;
-        options.onClick = (feature) => {
-          ensureUsaCountiesLoaded();
-          zoomToBounds(
-            featureBounds(feature),
-            USA_COUNTY_FULL_ZOOM,
-            10,
-          );
-        };
-      }
-
-      bindRegionHandler(detail, options);
-    }
-  }
-
-  function bindNepalDistrictHandlers() {
-    if (nepalDistrictHandlersBound) return;
-    nepalDistrictHandlersBound = true;
-    bindRegionHandler(NEPAL_DISTRICT_MAP, {
-      skipWhenLocalZoom: true,
-      onClick: (feature) => {
-        ensureNepalLocalLoaded();
-        zoomToBounds(featureBounds(feature), NEPAL_LOCAL_FULL_ZOOM, 12);
-      },
-    });
-  }
-
-  function bindNepalLocalHandlers() {
-    if (nepalLocalHandlersBound) return;
-    nepalLocalHandlersBound = true;
-    bindRegionHandler(NEPAL_LOCAL_MAP);
-  }
-
-  function bindUsaCountyHandlers() {
-    if (usaCountyHandlersBound) return;
-    usaCountyHandlersBound = true;
-    bindRegionHandler(USA_COUNTY_MAP, {
-      onClick: (feature) => {
-        zoomToBounds(featureBounds(feature), USA_COUNTY_FULL_ZOOM + 1, 14);
-      },
-    });
-  }
-
-  function ensureDetailLoaded() {
-    if (detailLoaded || !map?.isStyleLoaded()) return;
-    detailLoaded = true;
-    addLayers(detailSources(format), detailLayers(format));
-    clearDynamicParentLookups();
-    bindDetailHandlers();
-  }
-
   function ensureOverlaysLoaded() {
-    if (showDetailOverlays()) ensureDetailLoaded();
-    if (atZoom(NEPAL_DISTRICT_ZOOM)) ensureNepalDistrictsLoaded();
-    if (atZoom(NEPAL_LOCAL_ZOOM)) ensureNepalLocalLoaded();
-    if (atZoom(USA_COUNTY_ZOOM)) ensureUsaCountiesLoaded();
+    overlayManager?.ensureOverlaysLoaded();
     reportStats();
-  }
-
-  function ensureNepalDistrictsLoaded() {
-    if (nepalDistrictsLoaded) return;
-    nepalDistrictsLoaded = true;
-    addLayers(nepalDistrictSources(format), nepalDistrictLayers(format));
-    bindNepalDistrictHandlers();
-  }
-
-  function ensureNepalLocalLoaded() {
-    if (nepalLocalLoaded) return;
-    nepalLocalLoaded = true;
-    addLayers(nepalLocalSources(format), nepalLocalLayers(format));
-    bindNepalLocalHandlers();
-  }
-
-  function ensureUsaCountiesLoaded() {
-    if (usaCountiesLoaded) return;
-    usaCountiesLoaded = true;
-    addLayers(usaCountySources(format), usaCountyLayers(format));
-    bindUsaCountyHandlers();
   }
 
   onMount(() => {
@@ -333,6 +134,35 @@
     map.scrollZoom.setWheelZoomRate(zoomRate);
     map.scrollZoom.setZoomRate(zoomRate);
     map.touchZoomRotate.setZoomRate(1.5);
+
+    popup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 12,
+    });
+
+    overlayManager = createOverlayManager({
+      map,
+      format,
+      popup,
+      trackSource: trackGeojsonSource,
+      zoomToBounds,
+      onHoverClear: clearCountryHover,
+      setRegionHover: (target, feature) => {
+        if (
+          hoveredRegion &&
+          (hoveredRegion.id !== feature.id ||
+            hoveredRegion.source !== target.source)
+        ) {
+          clearRegionHover();
+        }
+        if (feature.id !== undefined) {
+          hoveredRegion = target;
+          map.setFeatureState(target, { hover: true });
+        }
+      },
+      clearRegionHover: dismissHoverUI,
+    });
 
     map.once("load", () => {
       if (format === "geojson") {
@@ -356,10 +186,29 @@
       pointerLat = null;
     });
 
-    map.on("move", updateMapPosition);
+    let overlayFrame = null;
+    function scheduleOverlaysLoaded() {
+      if (overlayFrame != null) return;
+      overlayFrame = requestAnimationFrame(() => {
+        overlayFrame = null;
+        ensureOverlaysLoaded();
+      });
+    }
+
+    map.on("move", () => {
+      updateMapPosition();
+      scheduleOverlaysLoaded();
+    });
     map.on("zoomend", () => {
       updateMapPosition();
       ensureOverlaysLoaded();
+      reportStats();
+    });
+
+    map.on("moveend", ensureOverlaysLoaded);
+
+    map.on("sourcedata", (e) => {
+      overlayManager?.onSourceData(e.sourceId, e.isSourceLoaded);
       reportStats();
     });
 
@@ -370,19 +219,13 @@
       map.resize();
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        if (viewMode === "world") fitWorldView();
+        if (!inDetailView()) fitWorldView();
       }, 150);
     });
     resizeObserver.observe(mapContainer);
 
-    popup = new maplibregl.Popup({
-      closeButton: false,
-      closeOnClick: false,
-      offset: 12,
-    });
-
     map.on("mousemove", "world-countries-fill", (e) => {
-      if (showDetailOverlays()) {
+      if (inDetailView()) {
         dismissHoverUI();
         return;
       }
@@ -408,16 +251,17 @@
     });
 
     map.on("mouseleave", "world-countries-fill", () => {
-      if (showDetailOverlays()) return;
+      if (inDetailView()) return;
       dismissHoverUI();
     });
 
     map.on("zoom", () => {
-      ensureOverlaysLoaded();
-      if (showDetailOverlays()) dismissHoverUI();
+      scheduleOverlaysLoaded();
+      if (inDetailView()) dismissHoverUI();
     });
 
     map.on("click", "world-countries-fill", (e) => {
+      if (inDetailView()) return;
       if (!e.features?.length) return;
       dismissHoverUI();
       const feature = e.features[0];
@@ -433,13 +277,8 @@
           );
       if (!camera) return;
 
-      viewMode = "country";
-
-      const targetZoom = countryClickZoom(props);
-      if (targetZoom != null) {
-        ensureDetailLoaded();
-        if (!isUsaCountry(props)) camera.zoom = targetZoom;
-      }
+      const clickZoom = countryClickZoom(props);
+      if (clickZoom != null && !isUsaCountry(props)) camera.zoom = clickZoom;
 
       map.easeTo({ ...camera, duration: 500, essential: true });
       map.once("moveend", () => {
@@ -449,6 +288,7 @@
     });
 
     return () => {
+      if (overlayFrame != null) cancelAnimationFrame(overlayFrame);
       clearTimeout(resizeTimer);
       clearInterval(statsTimer);
       resizeObserver.disconnect();
@@ -457,6 +297,7 @@
 
   onDestroy(() => {
     reportStats();
+    overlayManager?.destroy();
     popup?.remove();
     map?.remove();
   });

@@ -1,4 +1,5 @@
 export const DETAIL_ZOOM = 4;
+export const INDIA_STATE_ZOOM = 3;
 export const NEPAL_DISTRICT_ZOOM = 5;
 export const NEPAL_DISTRICT_FULL_ZOOM = 6;
 export const NEPAL_LOCAL_ZOOM = 7;
@@ -14,6 +15,27 @@ export const USA_DETAIL_BOUNDS = [
 
 export const USA_DETAIL_CENTER = [-110.2471, 45.3781];
 
+export const DETAIL_REGIONS = {
+  NPL: {
+    bounds: [
+      [80.060148, 26.347837],
+      [88.201434, 30.473111],
+    ],
+    minZoom: DETAIL_ZOOM,
+  },
+  IND: {
+    bounds: [
+      [68.165039, 6.748682],
+      [97.343555, 35.495898],
+    ],
+    minZoom: INDIA_STATE_ZOOM,
+  },
+  USA: {
+    bounds: USA_DETAIL_BOUNDS,
+    minZoom: USA_STATE_ZOOM,
+  },
+};
+
 export const WORLD_BOUNDS = [
   [-175, -55],
   [175, 78],
@@ -22,37 +44,17 @@ export const WORLD_BOUNDS = [
 export const WORLD_FIT_PADDING = 20;
 export const WORLD_MAX_ZOOM = DETAIL_ZOOM - 0.1;
 
+/**
+ * Detail overlays load for every country whose bounds intersect the viewport.
+ * Unload only when that country leaves the viewport (or falls below its min zoom).
+ */
+export const OVERLAY_LIMITS = {
+  unloadOnExit: true,
+};
+
 export const FORMAT_META = {
-  geojson: {
-    label: "GeoJSON",
-    tagline: "Simple · cacheable",
-    hint: "Easy to host anywhere. Once cached, files load quickly - on deploy you may see GeoJSON feel faster because the browser reuses cached responses with fewer round-trips than many tile requests.",
-    bestFor: [
-      "Small datasets and quick prototypes",
-      "Any static host — no byte-range server setup",
-      "Repeat visits when files are browser/CDN cached",
-    ],
-    notIdealFor: [
-      "Large admin boundaries — full download + JSON parse on first load",
-      "Zoom and pan — all raw polygons re-render every frame",
-      "Scaling to country → state → district level data",
-    ],
-  },
-  pmtiles: {
-    label: "PMTiles",
-    tagline: "Tiled · scalable",
-    hint: "Built for large vector maps. Streams only visible tiles via HTTP range requests - better on first load and at detail zoom, but needs a server that supports byte-range serving.",
-    bestFor: [
-      "Large datasets split across zoom levels",
-      "First visit — fetches only what is on screen",
-      "Smooth zoom — pre-simplified tiles per zoom level",
-    ],
-    notIdealFor: [
-      "Requires byte-range HTTP support (Worker + R2, etc.)",
-      "Extra build step with tippecanoe",
-      "More network requests than one cached GeoJSON file",
-    ],
-  },
+  geojson: { label: "GeoJSON" },
+  pmtiles: { label: "PMTiles" },
 };
 
 export function worldMeta(format) {
@@ -75,7 +77,7 @@ export const DETAIL_MAPS = {
     fillLayer: "india-states-fill",
     labelKey: "NAME_1",
     fallbackLabel: "State",
-    minZoom: DETAIL_ZOOM,
+    minZoom: INDIA_STATE_ZOOM,
   },
   USA: {
     source: "usa-states",
@@ -112,6 +114,81 @@ export const NEPAL_LOCAL_MAP = {
   minZoom: NEPAL_LOCAL_ZOOM,
   parent: "district",
 };
+
+/** Ordered overlay tiers — only one new tier loads per pass; next waits for idle/sourcedata. */
+export const OVERLAY_TIERS = [
+  {
+    id: "usa-states",
+    regions: ["USA"],
+    loadZoom: USA_STATE_ZOOM,
+    sourceIds: ["usa-states"],
+    fillLayer: "usa-states-fill",
+    sources: (format) => regionSources(format, "USA"),
+    layers: (format) => regionLayers(format, "USA"),
+    detail: DETAIL_MAPS.USA,
+  },
+  {
+    id: "npl-provinces",
+    regions: ["NPL"],
+    loadZoom: DETAIL_ZOOM,
+    sourceIds: ["nepal"],
+    fillLayer: "nepal-provinces-fill",
+    sources: (format) => regionSources(format, "NPL"),
+    layers: (format) => regionLayers(format, "NPL"),
+    detail: DETAIL_MAPS.NPL,
+  },
+  {
+    id: "ind-states",
+    regions: ["IND"],
+    loadZoom: INDIA_STATE_ZOOM,
+    sourceIds: ["india"],
+    fillLayer: "india-states-fill",
+    sources: (format) => regionSources(format, "IND"),
+    layers: (format) => regionLayers(format, "IND"),
+    detail: DETAIL_MAPS.IND,
+  },
+  {
+    id: "npl-districts",
+    regions: ["NPL"],
+    loadZoom: NEPAL_DISTRICT_ZOOM,
+    requires: ["npl-provinces"],
+    sourceIds: ["nepal-districts"],
+    fillLayer: "nepal-districts-fill",
+    sources: nepalDistrictSources,
+    layers: nepalDistrictLayers,
+    detail: NEPAL_DISTRICT_MAP,
+  },
+  {
+    id: "usa-counties",
+    regions: ["USA"],
+    loadZoom: USA_COUNTY_ZOOM,
+    requires: ["usa-states"],
+    sourceIds: ["usa-counties"],
+    fillLayer: "usa-counties-fill",
+    sources: usaCountySources,
+    layers: usaCountyLayers,
+    detail: USA_COUNTY_MAP,
+  },
+  {
+    id: "npl-local",
+    regions: ["NPL"],
+    loadZoom: NEPAL_LOCAL_ZOOM,
+    requires: ["npl-districts"],
+    sourceIds: ["nepal-local"],
+    fillLayer: "nepal-local-fill",
+    sources: nepalLocalSources,
+    layers: nepalLocalLayers,
+    detail: NEPAL_LOCAL_MAP,
+  },
+];
+
+export const OVERLAY_TIER_BY_ID = Object.fromEntries(
+  OVERLAY_TIERS.map((tier) => [tier.id, tier]),
+);
+
+export const OVERLAY_SOURCE_IDS = new Set(
+  OVERLAY_TIERS.flatMap((tier) => tier.sourceIds),
+);
 
 export const PARENT_LOOKUPS = {
   "us-state-fips": {
@@ -186,7 +263,7 @@ export function sourceLayerFor(sourceId, format) {
     nepal: "provinces",
     "nepal-districts": "districts",
     "nepal-local": "locallevels",
-    india: "districts",
+    india: "states",
     "usa-states": "states",
     "usa-counties": "counties",
   };
@@ -292,7 +369,106 @@ export function usaCountryCamera(map) {
 
 export function countryClickZoom(props) {
   if (!hasDetailMap(props)) return null;
-  return isUsaCountry(props) ? USA_STATE_ZOOM : DETAIL_ZOOM;
+  if (isUsaCountry(props)) return USA_STATE_ZOOM;
+  if (countryCode(props) === "IND") return INDIA_STATE_ZOOM;
+  return DETAIL_ZOOM;
+}
+
+export function centerInBounds(lng, lat, bounds) {
+  const [[west, south], [east, north]] = bounds;
+  const inLat = lat >= south && lat <= north;
+  if (west > east) return inLat && (lng >= west || lng <= east);
+  return inLat && lng >= west && lng <= east;
+}
+
+function longitudeRanges(west, east) {
+  if (west <= east) return [[west, east]];
+  return [
+    [west, 180],
+    [-180, east],
+  ];
+}
+
+function rangesOverlap(aRanges, bRanges) {
+  for (const [a0, a1] of aRanges) {
+    for (const [b0, b1] of bRanges) {
+      if (a0 <= b1 && b0 <= a1) return true;
+    }
+  }
+  return false;
+}
+
+export function boundsIntersect(boundsA, boundsB) {
+  const [[aWest, aSouth], [aEast, aNorth]] = boundsA;
+  const [[bWest, bSouth], [bEast, bNorth]] = boundsB;
+  if (aSouth > bNorth || bSouth > aNorth) return false;
+  return rangesOverlap(
+    longitudeRanges(aWest, aEast),
+    longitudeRanges(bWest, bEast),
+  );
+}
+
+export function viewBoundsFromMap(map) {
+  const bounds = map.getBounds();
+  return [
+    [bounds.getWest(), bounds.getSouth()],
+    [bounds.getEast(), bounds.getNorth()],
+  ];
+}
+
+function regionCenter(bounds) {
+  const [[west, south], [east, north]] = bounds;
+  return [(west + east) / 2, (south + north) / 2];
+}
+
+export function regionsRankedInView(lng, lat, zoom, viewBounds = null) {
+  const ranked = [];
+  for (const [code, region] of Object.entries(DETAIL_REGIONS)) {
+    if (zoom < region.minZoom) continue;
+    const inView = viewBounds
+      ? boundsIntersect(viewBounds, region.bounds)
+      : centerInBounds(lng, lat, region.bounds);
+    if (!inView) continue;
+    const [rLng, rLat] = regionCenter(region.bounds);
+    const dist2 = (lng - rLng) ** 2 + (lat - rLat) ** 2;
+    ranked.push({ code, score: -dist2 });
+  }
+
+  return ranked.sort((a, b) => b.score - a.score);
+}
+
+/** @deprecated Use regionsInView; kept for load-priority ordering with an optional cap. */
+export function focusedRegions(
+  lng,
+  lat,
+  zoom,
+  viewBounds = null,
+  maxCountries = Infinity,
+) {
+  return regionsRankedInView(lng, lat, zoom, viewBounds)
+    .slice(0, maxCountries)
+    .map((entry) => entry.code);
+}
+
+export function regionsInView(lng, lat, zoom, viewBounds = null) {
+  return regionsRankedInView(lng, lat, zoom, viewBounds).map(
+    (entry) => entry.code,
+  );
+}
+
+export function regionSources(format, code) {
+  const sources = detailSources(format);
+  if (code === "NPL") return { nepal: sources.nepal };
+  if (code === "IND") return { india: sources.india };
+  if (code === "USA") return { "usa-states": sources["usa-states"] };
+  return {};
+}
+
+export function regionLayers(format, code) {
+  if (code === "NPL") return nepalProvinceLayers(format);
+  if (code === "IND") return indiaStateLayers(format);
+  if (code === "USA") return usaStateLayers(format);
+  return [];
 }
 
 export function featureLabel(feature, detail) {
@@ -481,6 +657,7 @@ export function detailSources(format) {
       "usa-states": {
         type: "geojson",
         data: "/geojsons/usa-states.geojson",
+        promoteId: "name",
       },
     };
   }
@@ -637,7 +814,7 @@ function nepalProvinceLayers(format) {
 
 function indiaStateLayers(format) {
   const sl = sourceLayerFor("india", format);
-  const z = DETAIL_ZOOM;
+  const z = INDIA_STATE_ZOOM;
 
   return [
     {
@@ -662,7 +839,7 @@ function indiaStateLayers(format) {
       minzoom: z,
       paint: {
         "line-color": "#6ee7b7",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 8, 1.5, 12, 3],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 8, 1.5, 12, 3],
         "line-opacity": detailLineOpacity(z, 0.3),
       },
     },
@@ -673,7 +850,7 @@ function indiaStateLayers(format) {
       minzoom: z,
       paint: {
         "line-color": "#047857",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.6, 8, 1.2, 12, 2.5],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.6, 8, 1.2, 12, 2.5],
         "line-opacity": detailLineOpacity(z, 0.9),
       },
     },
@@ -805,7 +982,7 @@ export function nepalDistrictSources(format) {
       "nepal-districts": {
         type: "geojson",
         data: "/geojsons/nepal-districts.geojson",
-        promoteId: "id",
+        generateId: true,
       },
     };
   }
