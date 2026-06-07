@@ -1,21 +1,50 @@
 import { layerRenderOptions } from "./mapPerformance.js";
 
 export const DETAIL_ZOOM = 4;
+export const COUNTRY_LABEL_MAX_ZOOM = DETAIL_ZOOM;
 export const INDIA_STATE_ZOOM = 3;
-export const NEPAL_DISTRICT_ZOOM = 5;
-export const NEPAL_DISTRICT_FULL_ZOOM = 6;
-export const NEPAL_LOCAL_ZOOM = 7;
+export const NEPAL_PROVINCE_ZOOM = 5.5;
+export const NEPAL_PROVINCE_FULL_ZOOM = 6;
+export const NEPAL_DISTRICT_ZOOM = 6.5;
+export const NEPAL_DISTRICT_FULL_ZOOM = 7;
+export const NEPAL_LOCAL_ZOOM = 7.5;
 export const NEPAL_LOCAL_FULL_ZOOM = 8;
-export const USA_STATE_ZOOM = 1.8;
-export const USA_COUNTY_ZOOM = 4.5;
-export const USA_COUNTY_FULL_ZOOM = 5;
+export const USA_STATE_ZOOM = 2.5;
+export const USA_COUNTY_ZOOM = 5.5;
+export const USA_COUNTY_FULL_ZOOM = 6;
 
+/** Continental US, Alaska, Hawaii, Puerto Rico, and U.S. Virgin Islands. */
 export const USA_DETAIL_BOUNDS = [
-  [171.09509, 25.120779],
-  [-66.979601, 71.351633],
+  [171.09509, 17.0],
+  [-64.5, 71.351633],
 ];
 
-export const USA_DETAIL_CENTER = [-110.2471, 45.3781];
+/** Guam and Northern Mariana Islands. */
+export const USA_PACIFIC_BOUNDS = [
+  [144.0, 13.0],
+  [146.5, 20.5],
+];
+
+/** American Samoa. */
+export const USA_SAMOA_BOUNDS = [
+  [-171.5, -14.5],
+  [-168.0, -14.0],
+];
+
+export const USA_DETAIL_VIEW_BOUNDS = [
+  USA_DETAIL_BOUNDS,
+  USA_PACIFIC_BOUNDS,
+  USA_SAMOA_BOUNDS,
+];
+
+/** Separate world-map countries that are U.S. territories (load USA detail over them). */
+export const US_TERRITORY_CODES = new Set([
+  "PRI",
+  "VIR",
+  "GUM",
+  "MNP",
+  "ASM",
+]);
 
 export const DETAIL_REGIONS = {
   NPL: {
@@ -23,7 +52,7 @@ export const DETAIL_REGIONS = {
       [80.060148, 26.347837],
       [88.201434, 30.473111],
     ],
-    minZoom: DETAIL_ZOOM,
+    minZoom: NEPAL_PROVINCE_ZOOM,
   },
   IND: {
     bounds: [
@@ -44,6 +73,10 @@ export const WORLD_BOUNDS = [
 ];
 
 export const WORLD_FIT_PADDING = 20;
+export const WORLD_DEFAULT_ZOOM = 0.5;
+export const WORLD_MIN_ZOOM = 0.5;
+/** Below this zoom only one world is drawn; at/above it horizontal wrap copies appear. */
+export const WORLD_COPIES_MIN_ZOOM = 1.5;
 export const WORLD_MAX_ZOOM = DETAIL_ZOOM - 0.1;
 
 export const OVERLAY_LIMITS = {
@@ -86,7 +119,7 @@ export const DETAIL_MAPS = {
     fillLayer: "nepal-provinces-fill",
     labelKey: "DISTRICT",
     fallbackLabel: "Province",
-    minZoom: DETAIL_ZOOM,
+    minZoom: NEPAL_PROVINCE_ZOOM,
   },
   IND: {
     source: "india",
@@ -144,7 +177,7 @@ export const OVERLAY_TIERS = [
   {
     id: "npl-provinces",
     regions: ["NPL"],
-    loadZoom: DETAIL_ZOOM,
+    loadZoom: NEPAL_PROVINCE_ZOOM,
     fillLayer: "nepal-provinces-fill",
     sources: (format) => regionSources(format, "NPL"),
     layers: (format) => regionLayers(format, "NPL"),
@@ -305,6 +338,7 @@ export function countryName(props) {
     props.formal_en ||
     props.FORMAL_EN ||
     props.name_en ||
+    props.NAME_EN ||
     props.NAME ||
     props.name ||
     props.admin ||
@@ -315,93 +349,50 @@ export function countryName(props) {
   );
 }
 
-export function countryCode(props) {
-  return props.adm0_a3 || props.ADM0_A3;
+export const MAP_GLYPHS =
+  "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf";
+
+export const WORLD_LABEL_SOURCE = "world-labels";
+
+export function countryLabelText() {
+  return ["coalesce", ["get", "NAME"], ["get", "name"], ""];
 }
 
-export function isUsaCountry(props) {
-  const code = countryCode(props);
-  const formal = props.formal_en || props.FORMAL_EN;
-  return code === "USA" || formal === "United States of America";
+export function countryLabelOpacity() {
+  return 1;
 }
 
-export function hasDetailMap(props) {
-  const code = countryCode(props);
-  const formal = props.formal_en || props.FORMAL_EN;
-  return (
-    code === "NPL" ||
-    code === "IND" ||
-    code === "USA" ||
-    formal === "Nepal" ||
-    formal === "India" ||
-    formal === "United States of America"
-  );
-}
-
-export function featureBounds(feature) {
-  const coords = [];
-
-  function walk(ring) {
-    if (typeof ring[0] === "number") {
-      coords.push(ring);
-      return;
-    }
-    for (const part of ring) walk(part);
-  }
-
-  walk(feature.geometry.coordinates);
-
-  const lats = coords.map((c) => c[1]);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-
-  const rawLons = coords.map((c) => c[0]);
-  let minLon = Math.min(...rawLons);
-  let maxLon = Math.max(...rawLons);
-
-  if (maxLon - minLon > 180) {
-    const normLons = rawLons.map((lon) => (lon < 0 ? lon + 360 : lon));
-    minLon = Math.min(...normLons);
-    maxLon = Math.max(...normLons);
-  }
-
-  const west = minLon > 180 ? minLon - 360 : minLon;
-  const east = maxLon > 180 ? maxLon - 360 : maxLon;
-
+function countryLabelSizeAt(large, medium, small) {
   return [
-    [west, minLat],
-    [east, maxLat],
+    "case",
+    ["<=", ["coalesce", ["get", "LABELRANK"], 6], 2],
+    large,
+    ["<=", ["coalesce", ["get", "LABELRANK"], 6], 4],
+    medium,
+    small,
   ];
 }
 
-export function countryClickBounds(feature, props) {
-  return isUsaCountry(props) ? USA_DETAIL_BOUNDS : featureBounds(feature);
+export function countryLabelSize() {
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    1,
+    countryLabelSizeAt(13, 10, 8),
+    1.5,
+    countryLabelSizeAt(14, 11, 9),
+    2.2,
+    countryLabelSizeAt(14, 12, 10),
+    4,
+    countryLabelSizeAt(15, 12, 10),
+    6,
+    countryLabelSizeAt(17, 14, 11),
+  ];
 }
 
-export function countryFitOptions(props) {
-  return {
-    padding: 60,
-    maxZoom: countryCode(props) === "NPL" ? 7.5 : 6.5,
-  };
-}
-
-export function usaCountryCamera(map) {
-  const { clientWidth: w, clientHeight: h } = map.getContainer();
-  const aspect = w / h;
-  const lng = USA_DETAIL_CENTER[0] + (aspect - 2.2) * 3;
-  const lat = USA_DETAIL_CENTER[1] - Math.max(0, aspect - 2.5) * 2;
-
-  return {
-    center: [lng, lat],
-    zoom: USA_STATE_ZOOM,
-  };
-}
-
-export function countryClickZoom(props) {
-  if (!hasDetailMap(props)) return null;
-  if (isUsaCountry(props)) return USA_STATE_ZOOM;
-  if (countryCode(props) === "IND") return INDIA_STATE_ZOOM;
-  return DETAIL_ZOOM;
+export function countryCode(props) {
+  return props.adm0_a3 || props.ADM0_A3;
 }
 
 export function centerInBounds(lng, lat, bounds) {
@@ -451,15 +442,31 @@ function regionCenter(bounds) {
   return [(west + east) / 2, (south + north) / 2];
 }
 
+function usaDetailInView(lng, lat, viewBounds = null) {
+  return USA_DETAIL_VIEW_BOUNDS.some((bounds) =>
+    viewBounds
+      ? boundsIntersect(viewBounds, bounds)
+      : centerInBounds(lng, lat, bounds),
+  );
+}
+
+function usaDetailCenter() {
+  return regionCenter(USA_DETAIL_BOUNDS);
+}
+
 export function regionsRankedInView(lng, lat, zoom, viewBounds = null) {
   const ranked = [];
   for (const [code, region] of Object.entries(DETAIL_REGIONS)) {
     if (zoom < region.minZoom) continue;
-    const inView = viewBounds
-      ? boundsIntersect(viewBounds, region.bounds)
-      : centerInBounds(lng, lat, region.bounds);
+    const inView =
+      code === "USA"
+        ? usaDetailInView(lng, lat, viewBounds)
+        : viewBounds
+          ? boundsIntersect(viewBounds, region.bounds)
+          : centerInBounds(lng, lat, region.bounds);
     if (!inView) continue;
-    const [rLng, rLat] = regionCenter(region.bounds);
+    const [rLng, rLat] =
+      code === "USA" ? usaDetailCenter() : regionCenter(region.bounds);
     const dist2 = (lng - rLng) ** 2 + (lat - rLat) ** 2;
     ranked.push({ code, score: -dist2 });
   }
@@ -506,13 +513,10 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
-export function popupHtml(title, subtitle, options = {}) {
+export function popupHtml(title, subtitle) {
   const safeTitle = escapeHtml(title);
-  const hint = options.hint
-    ? `<br><span class="popup-hint">${escapeHtml(options.hint)}</span>`
-    : "";
-  if (!subtitle) return `<strong>${safeTitle}</strong>${hint}`;
-  return `<strong>${safeTitle}</strong><br><span class="popup-sub">${escapeHtml(subtitle)}</span>${hint}`;
+  if (!subtitle) return `<strong>${safeTitle}</strong>`;
+  return `<strong>${safeTitle}</strong><br><span class="popup-sub">${escapeHtml(subtitle)}</span>`;
 }
 
 function buildDynamicLookup(map, format, lookupId) {
@@ -573,18 +577,18 @@ export function resolveParentLabel(map, format, props, parent) {
   return String(raw);
 }
 
-export function regionPopupHtml(map, format, feature, detail, options = {}) {
+export function regionPopupHtml(map, format, feature, detail) {
   const subtitle = resolveParentLabel(
     map,
     format,
     feature.properties,
     detail.parent,
   );
-  return popupHtml(featureLabel(feature, detail), subtitle, options);
+  return popupHtml(featureLabel(feature, detail), subtitle);
 }
 
-export function countryPopupHtml(props, options = {}) {
-  return popupHtml(countryName(props), null, options);
+export function countryPopupHtml(props) {
+  return popupHtml(countryName(props), null);
 }
 
 export function featureStateTarget(source, sourceLayer, id) {
@@ -644,6 +648,122 @@ function detailLineOpacity(minZoom, base) {
   return layerLineOpacity(minZoom, minZoom + 0.5, base);
 }
 
+const BORDER_COLOR = "#000000";
+const HOVER_STATE = ["boolean", ["feature-state", "hover"], false];
+
+/** Relative border weight per admin level (scaled by zoom below). */
+const BORDER_WEIGHT = {
+  country: { base: 0.5, glow: 1.35, hover: 1.5 },
+  countryHover: { base: 0.55, glow: 1.55, hover: 1.4 },
+  region: { base: 0.48, glow: 1.4, hover: 1.45 },
+  district: { base: 0.34, glow: 1.35, hover: 1.35 },
+  local: { base: 0.26, glow: 1.3, hover: 1.3 },
+};
+
+function onHover(hoverValue, defaultValue) {
+  return ["case", HOVER_STATE, hoverValue, defaultValue];
+}
+
+const ZOOM_BORDER_STOPS = [0.75, 1, 1.3, 1.7, 2.4, 3.3, 5.5];
+const ZOOM_BORDER_OFFSETS = [0, 1, 2, 3, 5, 7];
+const ZOOM_BORDER_MAX = 16;
+
+/** Zoom must be top-level in interpolate — scale factors are baked into stop outputs. */
+function zoomBorderWidth(minZoom, multiplier) {
+  const stops = [];
+  for (let i = 0; i < ZOOM_BORDER_OFFSETS.length; i++) {
+    stops.push(minZoom + ZOOM_BORDER_OFFSETS[i], ZOOM_BORDER_STOPS[i] * multiplier);
+  }
+  stops.push(ZOOM_BORDER_MAX, ZOOM_BORDER_STOPS[ZOOM_BORDER_STOPS.length - 1] * multiplier);
+  return [
+    "interpolate",
+    ["exponential", 1.65],
+    ["zoom"],
+    ...stops,
+  ];
+}
+
+function borderLinePaint(weight, options = {}) {
+  const {
+    minZoom = WORLD_MIN_ZOOM,
+    glow = false,
+    opacity = 0.85,
+    hoverOpacity = 1,
+    hoverOnly = false,
+  } = options;
+  const multiplier = weight.base * (glow ? weight.glow : 1);
+  const paint = {
+    "line-color": BORDER_COLOR,
+    "line-width": zoomBorderWidth(minZoom, multiplier),
+  };
+  if (hoverOnly) {
+    paint["line-opacity"] = onHover(hoverOpacity, 0);
+  } else {
+    paint["line-opacity"] = opacity;
+  }
+  return paint;
+}
+
+function detailBoundaryLinePaint(weight, minZoom, peak, opacity = 0.9) {
+  return {
+    "line-color": BORDER_COLOR,
+    "line-width": zoomBorderWidth(minZoom, weight.base),
+    "line-opacity": layerLineOpacity(minZoom, peak, opacity),
+  };
+}
+
+function detailBoundaryGlowPaint(weight, minZoom, peak, opacity = 0.22) {
+  return {
+    "line-color": BORDER_COLOR,
+    "line-width": zoomBorderWidth(minZoom, weight.base * weight.glow),
+    "line-opacity": layerLineOpacity(minZoom, peak, opacity),
+  };
+}
+
+function detailBoundaryHoverPaint(weight, minZoom) {
+  return {
+    "line-color": BORDER_COLOR,
+    "line-width": zoomBorderWidth(minZoom, weight.base * weight.hover),
+    "line-opacity": onHover(1, 0),
+  };
+}
+
+function appendDetailBoundaryLayers(layers, {
+  source,
+  sl,
+  appear,
+  peak,
+  weight,
+  idPrefix,
+  lineOpacity = 0.9,
+  glowOpacity = 0.22,
+}) {
+  const { glow } = layerRenderOptions();
+  if (glow) {
+    layers.push({
+      id: `${idPrefix}-glow`,
+      type: "line",
+      ...vectorLayer(source, sl),
+      minzoom: appear,
+      paint: detailBoundaryGlowPaint(weight, appear, peak, glowOpacity),
+    });
+  }
+  layers.push({
+    id: `${idPrefix}-line`,
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: appear,
+    paint: detailBoundaryLinePaint(weight, appear, peak, lineOpacity),
+  });
+  layers.push({
+    id: `${idPrefix}-boundary-hover`,
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: appear,
+    paint: detailBoundaryHoverPaint(weight, appear),
+  });
+}
+
 function vectorLayer(source, sourceLayer, extra = {}) {
   const layer = { source, ...extra };
   if (sourceLayer) layer["source-layer"] = sourceLayer;
@@ -662,6 +782,14 @@ function worldSource(format) {
     type: "vector",
     url: "pmtiles:///world.pmtiles",
     promoteId: { boundaries: "ADM0_A3" },
+  };
+}
+
+function worldLabelsSource() {
+  return {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] },
+    promoteId: "ADM0_A3",
   };
 }
 
@@ -727,28 +855,15 @@ function worldLayers(format) {
       type: "line",
       ...vectorLayer("world", worldSl),
       paint: {
-        "line-color": "#94a3b8",
-        "line-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          0,
-          0.2,
-          4,
-          0.4,
-          8,
-          0.6,
-          12,
-          1,
-        ],
+        ...borderLinePaint(BORDER_WEIGHT.country, { glow: true, opacity: 0.25 }),
         "line-opacity": [
           "interpolate",
           ["linear"],
           ["zoom"],
           DETAIL_ZOOM,
-          0.6,
+          0.25,
           DETAIL_ZOOM + 1,
-          0.15,
+          0.1,
         ],
       },
     },
@@ -757,20 +872,7 @@ function worldLayers(format) {
       type: "line",
       ...vectorLayer("world", worldSl),
       paint: {
-        "line-color": "#64748b",
-        "line-width": [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          0,
-          0.4,
-          4,
-          0.6,
-          8,
-          0.8,
-          12,
-          1.2,
-        ],
+        ...borderLinePaint(BORDER_WEIGHT.country),
         "line-opacity": [
           "interpolate",
           ["linear"],
@@ -782,15 +884,53 @@ function worldLayers(format) {
         ],
       },
     },
+    {
+      id: "world-countries-boundary-highlight-glow",
+      type: "line",
+      ...vectorLayer("world", worldSl),
+      paint: borderLinePaint(BORDER_WEIGHT.countryHover, {
+        glow: true,
+        hoverOnly: true,
+        hoverOpacity: 0.35,
+      }),
+    },
+    {
+      id: "world-countries-boundary-highlight",
+      type: "line",
+      ...vectorLayer("world", worldSl),
+      paint: borderLinePaint(BORDER_WEIGHT.countryHover, { hoverOnly: true }),
+    },
+    {
+      id: "world-countries-label",
+      type: "symbol",
+      source: WORLD_LABEL_SOURCE,
+      filter: ["!=", countryLabelText(), ""],
+      layout: {
+        "text-field": countryLabelText(),
+        "text-font": ["Open Sans Semibold"],
+        "text-size": countryLabelSize(),
+        "text-anchor": "center",
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-optional": true,
+        "text-padding": 2,
+        "text-max-width": 10,
+      },
+      paint: {
+        "text-color": "#334155",
+        "text-halo-color": "#f8fafc",
+        "text-halo-width": 1.5,
+        "text-opacity": countryLabelOpacity(),
+      },
+    },
   ];
 }
 
 function nepalProvinceLayers(format) {
   const source = overlaySourceId(format, "nepal", "nepal");
   const sl = sourceLayerFor("nepal-provinces-fill", format);
-  const appear = DETAIL_ZOOM;
-  const peak = DETAIL_ZOOM + 0.5;
-  const { glow } = layerRenderOptions();
+  const appear = NEPAL_PROVINCE_ZOOM;
+  const peak = NEPAL_PROVINCE_FULL_ZOOM;
 
   const layers = [
     {
@@ -809,29 +949,15 @@ function nepalProvinceLayers(format) {
       },
     },
   ];
-  if (glow) {
-    layers.push({
-      id: "nepal-provinces-glow",
-      type: "line",
-      ...vectorLayer(source, sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#93c5fd",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 8, 1.5, 12, 3],
-        "line-opacity": layerLineOpacity(appear, peak, 0.3),
-      },
-    });
-  }
-  layers.push({
-    id: "nepal-provinces-line",
-    type: "line",
-    ...vectorLayer(source, sl),
-    minzoom: appear,
-    paint: {
-      "line-color": "#2563eb",
-      "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.6, 8, 1.2, 12, 2.5],
-      "line-opacity": layerLineOpacity(appear, peak, 0.9),
-    },
+  appendDetailBoundaryLayers(layers, {
+    source,
+    sl,
+    appear,
+    peak,
+    weight: BORDER_WEIGHT.region,
+    idPrefix: "nepal-provinces",
+    lineOpacity: 0.9,
+    glowOpacity: 0.2,
   });
   return layers;
 }
@@ -840,7 +966,7 @@ function indiaStateLayers(format) {
   const source = overlaySourceId(format, "india", "india");
   const sl = sourceLayerFor("india-states-fill", format);
   const z = INDIA_STATE_ZOOM;
-  const { glow } = layerRenderOptions();
+  const peak = z + 0.5;
 
   const layers = [
     {
@@ -859,29 +985,15 @@ function indiaStateLayers(format) {
       },
     },
   ];
-  if (glow) {
-    layers.push({
-      id: "india-states-glow",
-      type: "line",
-      ...vectorLayer(source, sl),
-      minzoom: z,
-      paint: {
-        "line-color": "#6ee7b7",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 8, 1.5, 12, 3],
-        "line-opacity": detailLineOpacity(z, 0.3),
-      },
-    });
-  }
-  layers.push({
-    id: "india-states-line",
-    type: "line",
-    ...vectorLayer(source, sl),
-    minzoom: z,
-    paint: {
-      "line-color": "#047857",
-      "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.6, 8, 1.2, 12, 2.5],
-      "line-opacity": detailLineOpacity(z, 0.9),
-    },
+  appendDetailBoundaryLayers(layers, {
+    source,
+    sl,
+    appear: z,
+    peak,
+    weight: BORDER_WEIGHT.region,
+    idPrefix: "india-states",
+    lineOpacity: 0.9,
+    glowOpacity: 0.2,
   });
   return layers;
 }
@@ -890,8 +1002,8 @@ function usaStateLayers(format) {
   const source = overlaySourceId(format, "usa", "usa-states");
   const sl = sourceLayerFor("usa-states-fill", format);
   const z = USA_STATE_ZOOM;
+  const peak = z + 0.5;
   const hoverState = ["boolean", ["feature-state", "hover"], false];
-  const { glow } = layerRenderOptions();
 
   const layers = [
     {
@@ -910,29 +1022,15 @@ function usaStateLayers(format) {
       },
     },
   ];
-  if (glow) {
-    layers.push({
-      id: "usa-states-glow",
-      type: "line",
-      ...vectorLayer(source, sl),
-      minzoom: z,
-      paint: {
-        "line-color": "#fca5a5",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 1.8, 0.6, 4, 1, 8, 1.5, 12, 3],
-        "line-opacity": 0.55,
-      },
-    });
-  }
-  layers.push({
-    id: "usa-states-line",
-    type: "line",
-    ...vectorLayer(source, sl),
-    minzoom: z,
-    paint: {
-      "line-color": "#b91c1c",
-      "line-width": ["interpolate", ["linear"], ["zoom"], 1.8, 0.8, 4, 1.2, 8, 1.8, 12, 2.5],
-      "line-opacity": 0.95,
-    },
+  appendDetailBoundaryLayers(layers, {
+    source,
+    sl,
+    appear: z,
+    peak,
+    weight: BORDER_WEIGHT.region,
+    idPrefix: "usa-states",
+    lineOpacity: 0.9,
+    glowOpacity: 0.2,
   });
   return layers;
 }
@@ -963,7 +1061,6 @@ export function usaCountyLayers(format) {
   const sl = sourceLayerFor("usa-counties-fill", format);
   const appear = USA_COUNTY_ZOOM;
   const peak = USA_COUNTY_FULL_ZOOM;
-  const { glow } = layerRenderOptions();
 
   const layers = [
     {
@@ -982,29 +1079,15 @@ export function usaCountyLayers(format) {
       },
     },
   ];
-  if (glow) {
-    layers.push({
-      id: "usa-counties-glow",
-      type: "line",
-      ...vectorLayer(source, sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#fde68a",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.4, 8, 1.2, 14, 2.5],
-        "line-opacity": layerLineOpacity(appear, peak, 0.35),
-      },
-    });
-  }
-  layers.push({
-    id: "usa-counties-line",
-    type: "line",
-    ...vectorLayer(source, sl),
-    minzoom: appear,
-    paint: {
-      "line-color": "#b45309",
-      "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.5, 8, 1, 14, 2],
-      "line-opacity": layerLineOpacity(appear, peak, 0.9),
-    },
+  appendDetailBoundaryLayers(layers, {
+    source,
+    sl,
+    appear,
+    peak,
+    weight: BORDER_WEIGHT.district,
+    idPrefix: "usa-counties",
+    lineOpacity: 0.85,
+    glowOpacity: 0.18,
   });
   return layers;
 }
@@ -1027,7 +1110,6 @@ export function nepalDistrictLayers(format) {
   const sl = sourceLayerFor("nepal-districts-fill", format);
   const appear = NEPAL_DISTRICT_ZOOM;
   const peak = NEPAL_DISTRICT_FULL_ZOOM;
-  const { glow } = layerRenderOptions();
 
   const layers = [
     {
@@ -1046,29 +1128,15 @@ export function nepalDistrictLayers(format) {
       },
     },
   ];
-  if (glow) {
-    layers.push({
-      id: "nepal-districts-glow",
-      type: "line",
-      ...vectorLayer(source, sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#fde68a",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.4, 8, 1.2, 14, 2.5],
-        "line-opacity": layerLineOpacity(appear, peak, 0.35),
-      },
-    });
-  }
-  layers.push({
-    id: "nepal-districts-line",
-    type: "line",
-    ...vectorLayer(source, sl),
-    minzoom: appear,
-    paint: {
-      "line-color": "#b45309",
-      "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.5, 8, 1, 14, 2],
-      "line-opacity": layerLineOpacity(appear, peak, 0.9),
-    },
+  appendDetailBoundaryLayers(layers, {
+    source,
+    sl,
+    appear,
+    peak,
+    weight: BORDER_WEIGHT.district,
+    idPrefix: "nepal-districts",
+    lineOpacity: 0.85,
+    glowOpacity: 0.18,
   });
   return layers;
 }
@@ -1091,7 +1159,6 @@ export function nepalLocalLayers(format) {
   const sl = sourceLayerFor("nepal-local-fill", format);
   const appear = NEPAL_LOCAL_ZOOM;
   const peak = NEPAL_LOCAL_FULL_ZOOM;
-  const { glow } = layerRenderOptions();
 
   const layers = [
     {
@@ -1110,29 +1177,15 @@ export function nepalLocalLayers(format) {
       },
     },
   ];
-  if (glow) {
-    layers.push({
-      id: "nepal-local-glow",
-      type: "line",
-      ...vectorLayer(source, sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#f0abfc",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 12, 1.2, 16, 2.5],
-        "line-opacity": layerLineOpacity(appear, peak, 0.35),
-      },
-    });
-  }
-  layers.push({
-    id: "nepal-local-line",
-    type: "line",
-    ...vectorLayer(source, sl),
-    minzoom: appear,
-    paint: {
-      "line-color": "#a21caf",
-      "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.5, 12, 1, 16, 2],
-      "line-opacity": layerLineOpacity(appear, peak, 0.9),
-    },
+  appendDetailBoundaryLayers(layers, {
+    source,
+    sl,
+    appear,
+    peak,
+    weight: BORDER_WEIGHT.local,
+    idPrefix: "nepal-local",
+    lineOpacity: 0.8,
+    glowOpacity: 0.15,
   });
   return layers;
 }
@@ -1140,7 +1193,11 @@ export function nepalLocalLayers(format) {
 export function buildMapStyle(format) {
   return {
     version: 8,
-    sources: { world: worldSource(format) },
+    glyphs: MAP_GLYPHS,
+    sources: {
+      world: worldSource(format),
+      [WORLD_LABEL_SOURCE]: worldLabelsSource(),
+    },
     layers: worldLayers(format),
   };
 }

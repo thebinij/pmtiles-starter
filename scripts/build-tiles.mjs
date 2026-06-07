@@ -93,7 +93,10 @@ run("npx", [
   "-o", "geojsons/india_state.geojson",
 ]);
 
-log("2/2: tippecanoe");
+log("2/3: world label points");
+run("node", ["scripts/build-world-labels.mjs"]);
+
+log("3/3: tippecanoe");
 for (const [index, build] of builds.entries()) {
   log(`${index + 1}/${builds.length}: ${build.label}`);
   run("tippecanoe", build.args);

@@ -5,26 +5,19 @@
   import {
     OVERLAY_TIERS,
     WORLD_BOUNDS,
+    WORLD_COPIES_MIN_ZOOM,
+    WORLD_DEFAULT_ZOOM,
     WORLD_FIT_PADDING,
-    WORLD_MAX_ZOOM,
+    WORLD_MIN_ZOOM,
     buildMapStyle,
-    countryClickBounds,
-    countryClickZoom,
-    countryFitOptions,
     countryPopupHtml,
-    isUsaCountry,
-    usaCountryCamera,
     featureStateTarget,
     worldMeta,
   } from "./mapConfig.js";
+  import { createCountryLabelManager } from "./countryLabelManager.js";
   import { createOverlayManager } from "./overlayManager.js";
   import { collectMapStats, createGeojsonLoadTracker } from "./mapStats.js";
-  import {
-    MOBILE_TAP_HINT,
-    featureTapKey,
-    isMobileMap,
-    mapLibreOptions,
-  } from "./mapPerformance.js";
+  import { isMobileMap, mapLibreOptions } from "./mapPerformance.js";
 
   let { format, onStats = () => {} } = $props();
 
@@ -32,7 +25,7 @@
 
   let centerLng = $state(0);
   let centerLat = $state(20);
-  let mapZoom = $state(1);
+  let mapZoom = $state(0.5);
   let pointerLng = $state(null);
   let pointerLat = $state(null);
 
@@ -85,7 +78,6 @@
       let overlayManager = null;
       let hoveredCountryId = null;
       let hoveredRegion = null;
-      let selectedCountryKey = null;
 
       function reportStats() {
         onStats(collectMapStats(fmt, geojsonTracker));
@@ -116,30 +108,25 @@
       }
 
       function dismissHoverUI() {
-        selectedCountryKey = null;
         clearCountryHover();
         clearRegionHover();
         popup.remove();
         if (map) map.getCanvas().style.cursor = "";
       }
 
-      function flyToCountry(feature, props) {
-        let camera = isUsaCountry(props)
-          ? usaCountryCamera(map)
-          : map.cameraForBounds(
-              countryClickBounds(feature, props),
-              countryFitOptions(props),
-            );
-        if (!camera) return;
-
-        const clickZoom = countryClickZoom(props);
-        if (clickZoom != null && !isUsaCountry(props)) camera.zoom = clickZoom;
-
-        map.easeTo({ ...camera, duration: 500, essential: true });
-        map.once("moveend", () => {
-          dismissHoverUI();
-          ensureOverlaysLoaded();
-        });
+      function showCountryPopup(feature, lngLat) {
+        clearRegionHover();
+        if (hoveredCountryId !== null && hoveredCountryId !== feature.id) {
+          clearCountryHover();
+        }
+        if (feature.id !== undefined) {
+          hoveredCountryId = feature.id;
+          setCountryHover(feature.id, true);
+        }
+        popup
+          .setLngLat(lngLat)
+          .setHTML(countryPopupHtml(feature.properties))
+          .addTo(map);
       }
 
       function interactiveFillLayers() {
@@ -158,28 +145,24 @@
         map?.fitBounds(WORLD_BOUNDS, {
           padding: WORLD_FIT_PADDING,
           duration,
-          maxZoom: WORLD_MAX_ZOOM,
+          minZoom: WORLD_DEFAULT_ZOOM,
+          maxZoom: WORLD_DEFAULT_ZOOM,
         });
+      }
+
+      function syncWorldCopies() {
+        map?.setRenderWorldCopies(map.getZoom() >= WORLD_COPIES_MIN_ZOOM);
       }
 
       map = new maplibregl.Map({
         container: node,
         style: buildMapStyle(fmt),
         center: [0, 20],
-        zoom: 1,
+        zoom: WORLD_DEFAULT_ZOOM,
+        minZoom: WORLD_MIN_ZOOM,
         renderWorldCopies: false,
         ...mapLibreOptions(),
       });
-
-      function zoomToBounds(bounds, minZoom, maxZoom = 8) {
-        const camera = map.cameraForBounds(bounds, {
-          padding: 40,
-          maxZoom,
-        });
-        if (!camera) return;
-        camera.zoom = Math.max(camera.zoom, minZoom);
-        map.easeTo({ ...camera, duration: 500, essential: true });
-      }
 
       function ensureOverlaysLoaded() {
         overlayManager?.ensureOverlaysLoaded();
@@ -200,23 +183,18 @@
       });
 
       if (touchMode) {
-        popup.on("close", () => {
-          selectedCountryKey = null;
-          overlayManager?.clearTouchSelection();
-          dismissHoverUI();
-        });
+        popup.on("close", dismissHoverUI);
       }
+
+      const countryLabelManager = createCountryLabelManager({ map });
 
       overlayManager = createOverlayManager({
         map,
         format: fmt,
         popup,
         trackSource: fmt === "geojson" ? trackGeojsonSource : () => {},
-        zoomToBounds,
-        onHoverClear: () => {
-          selectedCountryKey = null;
-          clearCountryHover();
-        },
+        onHoverClear: clearCountryHover,
+        onOverlaysChanged: () => countryLabelManager.refreshNow(),
         setRegionHover: (target, feature) => {
           if (
             hoveredRegion &&
@@ -242,6 +220,7 @@
       map.on("move", syncHud);
       map.on("zoom", () => {
         syncHud();
+        syncWorldCopies();
         if (inDetailView()) dismissHoverUI();
       });
 
@@ -256,16 +235,20 @@
       map.on("zoomend", () => {
         syncHud();
         ensureOverlaysLoaded();
+        countryLabelManager.refreshNow();
         reportStats();
       });
 
       map.on("moveend", () => {
         syncHud();
         ensureOverlaysLoaded();
+        countryLabelManager.refreshNow();
       });
 
       if (fmt === "pmtiles") {
-        map.on("idle", () => overlayManager?.ensureOverlaysLoaded());
+        map.on("idle", () => {
+          overlayManager?.ensureOverlaysLoaded();
+        });
       }
 
       map.on("sourcedata", (e) => {
@@ -275,11 +258,27 @@
 
       const statsTimer = setInterval(reportStats, 2000);
 
+      let resizeTimer = null;
       const resizeObserver = new ResizeObserver(() => {
         map.resize();
         syncHud();
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => countryLabelManager.refreshNow(), 120);
       });
       resizeObserver.observe(node);
+
+      function setCountryHoverFromFeature(feature) {
+        clearRegionHover();
+        popup.remove();
+        if (hoveredCountryId !== null && hoveredCountryId !== feature.id) {
+          clearCountryHover();
+        }
+        if (feature.id !== undefined) {
+          hoveredCountryId = feature.id;
+          setCountryHover(feature.id, true);
+        }
+        map.getCanvas().style.cursor = "pointer";
+      }
 
       if (!touchMode) {
         map.on("mousemove", "world-countries-fill", (e) => {
@@ -288,80 +287,30 @@
             return;
           }
           if (!e.features?.length) return;
-          map.getCanvas().style.cursor = "pointer";
-
-          const feature = e.features[0];
-          if (hoveredCountryId !== null && hoveredCountryId !== feature.id) {
-            clearCountryHover();
-          }
-          if (feature.id !== undefined && hoveredCountryId !== feature.id) {
-            hoveredCountryId = feature.id;
-            setCountryHover(feature.id, true);
-          }
-
-          popup
-            .setLngLat(e.lngLat)
-            .setHTML(countryPopupHtml(feature.properties))
-            .addTo(map);
+          setCountryHoverFromFeature(e.features[0]);
         });
 
         map.on("mouseleave", "world-countries-fill", () => {
           if (inDetailView()) return;
           dismissHoverUI();
         });
-      }
+      } else {
+        map.on("click", "world-countries-fill", (e) => {
+          if (inDetailView()) return;
+          if (!e.features?.length) return;
+          showCountryPopup(e.features[0], e.lngLat);
+        });
 
-      map.on("click", "world-countries-fill", (e) => {
-        if (inDetailView()) return;
-        if (!e.features?.length) return;
-
-        const feature = e.features[0];
-        const props = feature.properties;
-        const tapKey = featureTapKey("world-countries-fill", feature);
-
-        if (touchMode) {
-          if (selectedCountryKey === tapKey) {
-            dismissHoverUI();
-            flyToCountry(feature, props);
-            return;
-          }
-
-          overlayManager?.clearTouchSelection();
-          clearRegionHover();
-          popup.remove();
-
-          if (hoveredCountryId !== null && hoveredCountryId !== feature.id) {
-            clearCountryHover();
-          }
-          selectedCountryKey = tapKey;
-          if (feature.id !== undefined) {
-            hoveredCountryId = feature.id;
-            setCountryHover(feature.id, true);
-          }
-
-          popup
-            .setLngLat(e.lngLat)
-            .setHTML(countryPopupHtml(props, { hint: MOBILE_TAP_HINT }))
-            .addTo(map);
-          return;
-        }
-
-        dismissHoverUI();
-        flyToCountry(feature, props);
-      });
-
-      if (touchMode) {
         map.on("click", (e) => {
           const layers = interactiveFillLayers().filter((id) => map.getLayer(id));
           if (!layers.length) return;
           const hits = map.queryRenderedFeatures(e.point, { layers });
           if (hits.length) return;
-          overlayManager?.clearTouchSelection();
           dismissHoverUI();
         });
       }
 
-      const onLoad = () => {
+      const onLoad = async () => {
         if (fmt === "geojson") {
           trackGeojsonSource({
             type: "geojson",
@@ -370,8 +319,11 @@
         }
         map.resize();
         fitWorldView();
+        syncWorldCopies();
         syncHud();
         ensureOverlaysLoaded();
+        await countryLabelManager.load();
+        countryLabelManager.refreshNow();
         reportStats();
       };
 
@@ -379,6 +331,7 @@
       else map.once("load", onLoad);
 
       teardown = () => {
+        clearTimeout(resizeTimer);
         clearInterval(statsTimer);
         resizeObserver.disconnect();
         popup.remove();
@@ -453,13 +406,6 @@
 
   :global(.maplibregl-popup-content .popup-sub) {
     font-size: 12px;
-    color: #64748b;
-  }
-
-  :global(.maplibregl-popup-content .popup-hint) {
-    display: block;
-    margin-top: 0.35rem;
-    font-size: 11px;
     color: #64748b;
   }
 

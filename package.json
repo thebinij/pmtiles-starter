@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "labels": "node scripts/build-world-labels.mjs",
     "tiles": "node scripts/build-tiles.mjs",
     "test:regions": "node scripts/test-regions.mjs",
     "upload:tiles": "node scripts/upload-tiles.mjs",
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "polylabel": "^2.0.1",
     "svelte": "^5.33.0",
     "vite": "^6.3.5",
     "wrangler": "^4.14.0"

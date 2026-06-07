@@ -21,6 +21,10 @@ const usaView = [
   [-110, 35],
   [-90, 45],
 ];
+const puertoRicoView = [
+  [-67.5, 17.8],
+  [-65.5, 18.6],
+];
 const europeView = [
   [-5, 45],
   [15, 55],
@@ -31,13 +35,16 @@ function includesAll(got, expected) {
 }
 
 const cases = [
-  ["Kathmandu viewport z6", 85.32, 27.72, 6, kathmanduView, ["NPL"]],
+  ["Kathmandu viewport z5 (below province min)", 85.32, 27.72, 5, kathmanduView, []],
+  ["Kathmandu viewport z5.5", 85.32, 27.72, 5.5, kathmanduView, ["NPL"]],
   ["Eastern Nepal viewport z6", 87.8, 27.2, 6, easternNepalView, ["NPL"]],
   ["Delhi viewport z5", 77.2, 28.6, 5, delhiView, ["IND"]],
   ["Delhi viewport z3", 77.2, 28.6, 3, delhiView, ["IND"]],
   ["Delhi viewport z4", 77.2, 28.6, 4, delhiView, ["IND"]],
   ["Delhi viewport z6", 77.2, 28.6, 6, delhiView, ["IND"]],
-  ["USA viewport z2", -100, 40, 2, usaView, ["USA"]],
+  ["USA viewport z2 (below state min)", -100, 40, 2, usaView, []],
+  ["USA viewport z2.5", -100, 40, 2.5, usaView, ["USA"]],
+  ["Puerto Rico viewport z2.5", -66.1, 18.2, 2.5, puertoRicoView, ["USA"]],
   ["Europe viewport z5", 10, 50, 5, europeView, []],
 ];
 
@@ -75,12 +82,20 @@ const wideView = [
   [-120, 15],
   [100, 45],
 ];
-const wideInView = regionsInView(0, 30, 5, wideView);
+const wideInViewZ5 = regionsInView(0, 30, 5, wideView);
+const wideZ5Ok = wideInViewZ5.includes("USA") && wideInViewZ5.includes("IND");
+console.log(
+  `${wideZ5Ok ? "OK" : "FAIL"} wide z5 keeps USA and India (Nepal needs z5.5+):`,
+  wideInViewZ5,
+);
+if (!wideZ5Ok) failed += 1;
+
+const wideInView = regionsInView(0, 30, 6, wideView);
 const wideOk =
   wideInView.includes("USA") &&
   wideInView.includes("NPL") &&
   wideInView.includes("IND");
-console.log(`${wideOk ? "OK" : "FAIL"} wide z5 keeps all intersecting countries:`, wideInView);
+console.log(`${wideOk ? "OK" : "FAIL"} wide z6 keeps all intersecting countries:`, wideInView);
 if (!wideOk) failed += 1;
 
 const ranked = regionsRankedInView(77.2, 28.6, 5, delhiView);

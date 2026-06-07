@@ -1,5 +1,3 @@
-export const MOBILE_TAP_HINT = "Tap again to open";
-
 export function isMobileMap() {
   if (typeof window === "undefined") return false;
   return (
@@ -26,9 +24,4 @@ export function mapLibreOptions() {
     maxTileCacheSize: mobile ? 80 : 120,
     cooperativeGestures: mobile,
   };
-}
-
-export function featureTapKey(layerId, feature) {
-  const id = feature.id ?? feature.properties?.id ?? feature.properties?.ADM0_A3;
-  return `${layerId}:${id}`;
 }

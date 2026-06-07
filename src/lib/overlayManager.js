@@ -4,23 +4,17 @@ import {
   NEPAL_LOCAL_FULL_ZOOM,
   OVERLAY_LIMITS,
   OVERLAY_SOURCE_IDS,
-  OVERLAY_TIER_BY_ID,
   OVERLAY_TIERS,
   USA_COUNTY_FULL_ZOOM,
   clearDynamicParentLookups,
   detailMapSource,
   detailMapSourceLayer,
-  featureBounds,
   regionsInView,
   regionsRankedInView,
   regionPopupHtml,
   viewBoundsFromMap,
 } from "./mapConfig.js";
-import {
-  MOBILE_TAP_HINT,
-  featureTapKey,
-  isMobileMap,
-} from "./mapPerformance.js";
+import { isMobileMap } from "./mapPerformance.js";
 
 function tierLayerIds(tier, format) {
   return tier.layers(format).map((layer) => layer.id);
@@ -43,10 +37,10 @@ export function createOverlayManager({
   format,
   popup,
   trackSource = () => {},
-  zoomToBounds,
   onHoverClear,
   setRegionHover,
   clearRegionHover,
+  onOverlaysChanged = () => {},
 }) {
   const tiersLoaded = new Set();
   const tiersPending = new Set();
@@ -57,7 +51,6 @@ export function createOverlayManager({
   const sourcesWithData = new Set();
   let tierChainScheduled = false;
   const touchMode = isMobileMap();
-  let selectedTapKey = null;
 
   function atZoom(threshold) {
     return map.getZoom() >= threshold;
@@ -162,18 +155,12 @@ export function createOverlayManager({
     tiersHandlersBound.delete(tier.id);
   }
 
-  function clearTouchSelection() {
-    selectedTapKey = null;
-  }
-
-  function showRegionPopup(tier, feature, lngLat, { hint = null } = {}) {
+  function showRegionPopup(tier, feature, lngLat) {
     onHoverClear();
     setRegionHover(regionFeatureTarget(tier, feature, format), feature);
     popup
       .setLngLat(lngLat)
-      .setHTML(
-        regionPopupHtml(map, format, feature, tier.detail, hint ? { hint } : {}),
-      )
+      .setHTML(regionPopupHtml(map, format, feature, tier.detail))
       .addTo(map);
   }
 
@@ -295,35 +282,17 @@ export function createOverlayManager({
       refs.mouseleave = onMouseLeave;
     }
 
-    const onClick = (e) => {
-      if (map.getZoom() < minZoom || !e.features?.length) return;
-      if (shouldSkipTierInteraction(options)) return;
+    if (touchMode) {
+      const onClick = (e) => {
+        if (map.getZoom() < minZoom || !e.features?.length) return;
+        if (shouldSkipTierInteraction(options)) return;
+        showRegionPopup(tier, e.features[0], e.lngLat);
+      };
 
-      const feature = e.features[0];
-      const tapKey = featureTapKey(fillLayer, feature);
+      map.on("click", fillLayer, onClick);
+      refs.click = onClick;
+    }
 
-      if (touchMode) {
-        if (selectedTapKey === tapKey) {
-          selectedTapKey = null;
-          clearRegionHover();
-          popup?.remove();
-          options.onClick?.(feature);
-          return;
-        }
-        selectedTapKey = tapKey;
-        showRegionPopup(tier, feature, e.lngLat, {
-          hint: options.onClick ? MOBILE_TAP_HINT : null,
-        });
-        return;
-      }
-
-      clearRegionHover();
-      popup?.remove();
-      options.onClick?.(feature);
-    };
-
-    map.on("click", fillLayer, onClick);
-    refs.click = onClick;
     tierHandlerRefs.set(tier.id, refs);
   }
 
@@ -332,31 +301,10 @@ export function createOverlayManager({
     if (tier.id === "npl-provinces") {
       options.skipWhenDistrictZoom = true;
       options.skipWhenLocalZoom = true;
-      options.onClick = (feature) => {
-        ensureTier("npl-districts", { force: true });
-        zoomToBounds(featureBounds(feature), NEPAL_DISTRICT_FULL_ZOOM, 8);
-      };
     } else if (tier.id === "usa-states") {
       options.skipWhenCountyZoom = true;
-      options.onClick = (feature) => {
-        ensureTier("usa-counties", { force: true });
-        zoomToBounds(featureBounds(feature), USA_COUNTY_FULL_ZOOM, 10);
-      };
-    } else if (tier.id === "ind-states") {
-      options.onClick = (feature) => {
-        const minZoom = Math.max(map.getZoom(), tier.detail.minZoom);
-        zoomToBounds(featureBounds(feature), minZoom, 10);
-      };
     } else if (tier.id === "npl-districts") {
       options.skipWhenLocalZoom = true;
-      options.onClick = (feature) => {
-        ensureTier("npl-local", { force: true });
-        zoomToBounds(featureBounds(feature), NEPAL_LOCAL_FULL_ZOOM, 12);
-      };
-    } else if (tier.id === "usa-counties") {
-      options.onClick = (feature) => {
-        zoomToBounds(featureBounds(feature), USA_COUNTY_FULL_ZOOM + 1, 14);
-      };
     }
     return options;
   }
@@ -452,38 +400,6 @@ export function createOverlayManager({
     return eligible[0];
   }
 
-  function ensureTier(tierId, { force = false } = {}) {
-    const tier = OVERLAY_TIER_BY_ID[tierId];
-    if (!tier) return;
-
-    const country = tierCountry(tier);
-    const { inView } = viewContext();
-
-    for (const requiredId of tier.requires ?? []) {
-      const required = OVERLAY_TIER_BY_ID[requiredId];
-      const requiredCountry = required ? tierCountry(required) : null;
-      const prerequisiteForce = force || inView.includes(requiredCountry);
-      ensureTier(requiredId, { force: prerequisiteForce });
-    }
-
-    if (!tierRequirementsMet(tier)) {
-      scheduleTierChain();
-      return;
-    }
-
-    if (tiersLoaded.has(tier.id) || tiersPending.has(tier.id)) return;
-
-    if (map.getLayer(tier.fillLayer)) {
-      if (tiersHidden.has(tier.id)) showTier(tier);
-      finishTierLoad(tier, tierSourceIds(tier, format));
-      return;
-    }
-
-    if (!force && !inView.includes(country)) return;
-    if (!force && map.getZoom() < tier.loadZoom) return;
-    loadTier(tier);
-  }
-
   function ensureOverlaysLoaded() {
     promotePendingTiers();
 
@@ -493,6 +409,7 @@ export function createOverlayManager({
 
     const tier = nextTierToLoad(inView, zoom, ranked);
     if (tier) loadTier(tier);
+    onOverlaysChanged();
   }
 
   function onSourceData(sourceId) {
@@ -522,11 +439,9 @@ export function createOverlayManager({
 
   return {
     ensureOverlaysLoaded,
-    ensureTier,
     onSourceData,
     inDetailView,
     getFocusedRegions,
-    clearTouchSelection,
     destroy,
   };
 }
