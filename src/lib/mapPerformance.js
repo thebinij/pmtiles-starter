@@ -23,5 +23,20 @@ export function mapLibreOptions() {
     fadeDuration: 0,
     maxTileCacheSize: mobile ? 80 : 120,
     cooperativeGestures: mobile,
+    bearing: 0,
+    pitch: 0,
+    roll: 0,
+    maxPitch: 0,
+    dragRotate: false,
+    touchPitch: false,
+    pitchWithRotate: false,
   };
+}
+
+/** Keep the map flat with north at the top (no bearing, pitch, or roll). */
+export function lockMapNorthUp(map) {
+  map.dragRotate.disable();
+  map.touchZoomRotate.disableRotation();
+  map.touchPitch.disable();
+  map.keyboard.disableRotation();
 }

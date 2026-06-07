@@ -1,17 +1,17 @@
 import {
-  DETAIL_ZOOM,
   NEPAL_DISTRICT_FULL_ZOOM,
   NEPAL_LOCAL_FULL_ZOOM,
   OVERLAY_LIMITS,
   OVERLAY_SOURCE_IDS,
   OVERLAY_TIERS,
   USA_COUNTY_FULL_ZOOM,
+  buildRegionFeatureTarget,
   clearDynamicParentLookups,
-  detailMapSource,
-  detailMapSourceLayer,
   regionsInView,
   regionsRankedInView,
   regionPopupHtml,
+  countriesWithActiveDetail,
+  countryHasActiveDetail,
   viewBoundsFromMap,
 } from "./mapConfig.js";
 import { isMobileMap } from "./mapPerformance.js";
@@ -22,14 +22,6 @@ function tierLayerIds(tier, format) {
 
 function tierSourceIds(tier, format) {
   return Object.keys(tier.sources(format));
-}
-
-function regionFeatureTarget(tier, feature, format) {
-  const source = detailMapSource(tier.detail, format);
-  const target = { source, id: feature.id };
-  const sourceLayer = detailMapSourceLayer(tier.detail, format);
-  if (sourceLayer) target.sourceLayer = sourceLayer;
-  return target;
 }
 
 export function createOverlayManager({
@@ -157,7 +149,8 @@ export function createOverlayManager({
 
   function showRegionPopup(tier, feature, lngLat) {
     onHoverClear();
-    setRegionHover(regionFeatureTarget(tier, feature, format), feature);
+    const target = buildRegionFeatureTarget(tier, feature, format);
+    if (target) setRegionHover(target, feature);
     popup
       .setLngLat(lngLat)
       .setHTML(regionPopupHtml(map, format, feature, tier.detail))
@@ -263,7 +256,9 @@ export function createOverlayManager({
         onHoverClear();
         map.getCanvas().style.cursor = "pointer";
         const feature = e.features[0];
-        setRegionHover(regionFeatureTarget(tier, feature, format), feature);
+        const target = buildRegionFeatureTarget(tier, feature, format);
+        if (target) setRegionHover(target, feature);
+        else clearRegionHover();
         popup
           .setLngLat(e.lngLat)
           .setHTML(regionPopupHtml(map, format, feature, tier.detail))
@@ -419,12 +414,11 @@ export function createOverlayManager({
     scheduleTierChain();
   }
 
-  function inDetailView() {
-    const { zoom } = viewContext();
-    if (zoom < DETAIL_ZOOM) return false;
-    return OVERLAY_TIERS.some(
-      (tier) => tier.detail && map.getLayer(tier.fillLayer) && tierLayerVisible(tier),
-    );
+  function inDetailView(countryCode) {
+    if (countryCode != null && countryCode !== "") {
+      return countryHasActiveDetail(map, format, countryCode);
+    }
+    return countriesWithActiveDetail(map, format).size > 0;
   }
 
   function getFocusedRegions() {

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import WorldMap from "./lib/WorldMap.svelte";
-  import { FORMAT_META } from "./lib/mapConfig.js";
+  import { FORMAT_META, MAP_OCEAN_COLOR } from "./lib/mapConfig.js";
   import { pathFromTab, tabFromPath } from "./lib/routes.js";
 
   let tab = $state(tabFromPath(window.location.pathname));
@@ -51,7 +51,7 @@
       {/each}
     </div>
 
-    <div class="map-panel">
+    <div class="map-panel" style:background={MAP_OCEAN_COLOR}>
       {#key tab}
         <WorldMap format={tab} />
       {/key}
@@ -139,7 +139,6 @@
     min-height: 400px;
     border-radius: 0 12px 12px 12px;
     overflow: hidden;
-    background: #dce8f2;
     border: 1px solid #c5d5e4;
     box-shadow:
       0 1px 2px rgb(26 43 60 / 6%),

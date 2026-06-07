@@ -1,5 +1,20 @@
 import { layerRenderOptions } from "./mapPerformance.js";
 
+export const MAP_OCEAN_COLOR = "#c8e4f2";
+export const MAP_LAND_COLOR = "#f5f0e8";
+/** Slightly deeper warm tan — hover stays in the land family, not blue. */
+export const MAP_LAND_HOVER_COLOR = "#ebe3d6";
+
+/** Boundary colors per detail tier: base line + lighter hover shade (earth tones). */
+export const DETAIL_BORDER = {
+  usaState: { line: "#a84838", hover: "#d46250" },
+  indiaState: { line: "#6d5d48", hover: "#8f7a62" },
+  nepalProvince: { line: "#4a6b4f", hover: "#628569" },
+  county: { line: "#c49a2c", hover: "#deb650" },
+  district: { line: "#9a7344", hover: "#b68f5c" },
+  local: { line: "#7a5c6d", hover: "#9a758b" },
+};
+
 export const DETAIL_ZOOM = 4;
 export const COUNTRY_LABEL_MAX_ZOOM = DETAIL_ZOOM;
 export const INDIA_STATE_ZOOM = 3;
@@ -597,28 +612,82 @@ export function featureStateTarget(source, sourceLayer, id) {
   return target;
 }
 
-function layerFillOpacity(appearZoom, peakZoom, normal, hover) {
-  const hoverState = ["boolean", ["feature-state", "hover"], false];
-  const faint = ["case", hoverState, hover * 0.35, normal * 0.35];
-  const mid = ["case", hoverState, hover * 0.7, normal * 0.7];
-  const full = ["case", hoverState, hover, normal];
-  const peak = ["case", hoverState, hover * 1.25, normal * 1.25];
-  const midZoom = (appearZoom + peakZoom) / 2;
-  return [
-    "interpolate",
-    ["linear"],
-    ["zoom"],
-    appearZoom - 0.25,
-    0,
-    appearZoom,
-    faint,
-    midZoom,
-    mid,
-    peakZoom,
-    full,
-    peakZoom + 2,
-    peak,
-  ];
+const PROMOTE_ID_BY_FILL_LAYER = {
+  "nepal-provinces-fill": "TARGET",
+  "india-states-fill": "ID_1",
+  "usa-states-fill": "name",
+  "usa-counties-fill": "GEOID",
+  "nepal-districts-fill": "DISTRICT",
+  "nepal-local-fill": "locallevel_fullcode",
+};
+
+/**
+ * Id for setFeatureState — must match the source promoteId value MapLibre uses
+ * internally. Prefer feature.id when it agrees with the promote property; fall
+ * back to the property when tiles still expose tippecanoe --generate-ids.
+ */
+export function resolveFeatureStateId(feature, fillLayer) {
+  if (!feature) return undefined;
+  const key = PROMOTE_ID_BY_FILL_LAYER[fillLayer];
+  const fromProp = key ? feature.properties?.[key] : undefined;
+  const hasProp =
+    fromProp !== undefined && fromProp !== null && fromProp !== "";
+  const rawId = feature.id;
+  const hasId = rawId !== undefined && rawId !== null && rawId !== "";
+
+  if (hasId && hasProp && String(rawId) === String(fromProp)) return rawId;
+  if (hasProp) return fromProp;
+  if (hasId) return rawId;
+  return undefined;
+}
+
+export function buildRegionFeatureTarget(tier, feature, format) {
+  const id = resolveFeatureStateId(feature, tier.detail.fillLayer);
+  if (id === undefined) return null;
+
+  const source = detailMapSource(tier.detail, format);
+  const target = { source, id };
+  const sourceLayer = detailMapSourceLayer(tier.detail, format);
+  if (sourceLayer) target.sourceLayer = sourceLayer;
+  return target;
+}
+
+function tierDetailFillVisible(map, tier, format, zoom) {
+  if (zoom < tier.loadZoom) return false;
+  for (const spec of tier.layers(format)) {
+    if (spec.type !== "fill") continue;
+    if (!map.getLayer(spec.id)) continue;
+    if (map.getLayoutProperty(spec.id, "visibility") === "none") continue;
+    const layer = map.getLayer(spec.id);
+    const minZoom = layer.minzoom ?? spec.minzoom ?? 0;
+    const maxZoom = layer.maxzoom ?? spec.maxzoom ?? 24;
+    if (zoom >= minZoom && zoom < maxZoom) return true;
+  }
+  return false;
+}
+
+/** Country codes with a visible detail overlay at the current zoom. */
+export function countriesWithActiveDetail(map, format, zoom = map.getZoom()) {
+  const active = new Set();
+  for (const tier of OVERLAY_TIERS) {
+    if (!tier.detail || !tierDetailFillVisible(map, tier, format, zoom)) continue;
+    for (const code of tier.regions) active.add(code);
+  }
+  if (active.has("USA")) {
+    for (const code of US_TERRITORY_CODES) active.add(code);
+  }
+  return active;
+}
+
+export function countryHasActiveDetail(map, format, code, zoom = map.getZoom()) {
+  if (code == null || code === "") return false;
+  return countriesWithActiveDetail(map, format, zoom).has(String(code));
+}
+
+export function featureCountryCode(feature) {
+  if (!feature) return null;
+  if (feature.id != null && feature.id !== "") return String(feature.id);
+  return countryCode(feature.properties ?? {}) ?? null;
 }
 
 function layerLineOpacity(appearZoom, peakZoom, base) {
@@ -640,17 +709,16 @@ function layerLineOpacity(appearZoom, peakZoom, base) {
   ];
 }
 
-function detailFillOpacity(minZoom, normal, hover) {
-  return layerFillOpacity(minZoom, minZoom + 0.5, normal, hover);
-}
-
-function detailLineOpacity(minZoom, base) {
-  return layerLineOpacity(minZoom, minZoom + 0.5, base);
+/** Transparent fill for hit-testing; hover fill matches country land highlight. */
+function detailInteractiveFillPaint() {
+  return {
+    "fill-color": ["case", HOVER_STATE, MAP_LAND_HOVER_COLOR, MAP_LAND_COLOR],
+    "fill-opacity": ["case", HOVER_STATE, 0.92, 0],
+  };
 }
 
 const BORDER_COLOR = "#000000";
 const HOVER_STATE = ["boolean", ["feature-state", "hover"], false];
-
 /** Relative border weight per admin level (scaled by zoom below). */
 const BORDER_WEIGHT = {
   country: { base: 0.5, glow: 1.35, hover: 1.5 },
@@ -663,6 +731,7 @@ const BORDER_WEIGHT = {
 function onHover(hoverValue, defaultValue) {
   return ["case", HOVER_STATE, hoverValue, defaultValue];
 }
+
 
 const ZOOM_BORDER_STOPS = [0.75, 1, 1.3, 1.7, 2.4, 3.3, 5.5];
 const ZOOM_BORDER_OFFSETS = [0, 1, 2, 3, 5, 7];
@@ -704,25 +773,26 @@ function borderLinePaint(weight, options = {}) {
   return paint;
 }
 
-function detailBoundaryLinePaint(weight, minZoom, peak, opacity = 0.9) {
+function detailBoundaryLinePaint(weight, minZoom, peak, border, opacity = 0.9) {
+  const { line, hover } = border;
   return {
-    "line-color": BORDER_COLOR,
+    "line-color": ["case", HOVER_STATE, hover, line],
     "line-width": zoomBorderWidth(minZoom, weight.base),
     "line-opacity": layerLineOpacity(minZoom, peak, opacity),
   };
 }
 
-function detailBoundaryGlowPaint(weight, minZoom, peak, opacity = 0.22) {
+function detailBoundaryGlowPaint(weight, minZoom, peak, color, opacity = 0.22) {
   return {
-    "line-color": BORDER_COLOR,
+    "line-color": color,
     "line-width": zoomBorderWidth(minZoom, weight.base * weight.glow),
     "line-opacity": layerLineOpacity(minZoom, peak, opacity),
   };
 }
 
-function detailBoundaryHoverPaint(weight, minZoom) {
+function detailBoundaryHoverPaint(weight, minZoom, color) {
   return {
-    "line-color": BORDER_COLOR,
+    "line-color": color,
     "line-width": zoomBorderWidth(minZoom, weight.base * weight.hover),
     "line-opacity": onHover(1, 0),
   };
@@ -734,10 +804,12 @@ function appendDetailBoundaryLayers(layers, {
   appear,
   peak,
   weight,
+  border,
   idPrefix,
   lineOpacity = 0.9,
   glowOpacity = 0.22,
 }) {
+  const { line, hover } = border;
   const { glow } = layerRenderOptions();
   if (glow) {
     layers.push({
@@ -745,7 +817,7 @@ function appendDetailBoundaryLayers(layers, {
       type: "line",
       ...vectorLayer(source, sl),
       minzoom: appear,
-      paint: detailBoundaryGlowPaint(weight, appear, peak, glowOpacity),
+      paint: detailBoundaryGlowPaint(weight, appear, peak, line, glowOpacity),
     });
   }
   layers.push({
@@ -753,14 +825,14 @@ function appendDetailBoundaryLayers(layers, {
     type: "line",
     ...vectorLayer(source, sl),
     minzoom: appear,
-    paint: detailBoundaryLinePaint(weight, appear, peak, lineOpacity),
+    paint: detailBoundaryLinePaint(weight, appear, peak, border, lineOpacity),
   });
   layers.push({
     id: `${idPrefix}-boundary-hover`,
     type: "line",
     ...vectorLayer(source, sl),
     minzoom: appear,
-    paint: detailBoundaryHoverPaint(weight, appear),
+    paint: detailBoundaryHoverPaint(weight, appear, hover),
   });
 }
 
@@ -816,7 +888,7 @@ export function detailSources(format) {
   return {
     nepal: pmtilesVectorSource("pmtiles:///nepal.pmtiles", {
       provinces: "TARGET",
-      districts: "id",
+      districts: "DISTRICT",
       locallevels: "locallevel_fullcode",
     }, 12),
     india: pmtilesVectorSource("pmtiles:///india.pmtiles", "ID_1", 7),
@@ -829,8 +901,16 @@ export function detailSources(format) {
 
 function worldLayers(format) {
   const worldSl = format === "pmtiles" ? "boundaries" : null;
+  const hoverState = ["boolean", ["feature-state", "hover"], false];
 
   return [
+    {
+      id: "background",
+      type: "background",
+      paint: {
+        "background-color": MAP_OCEAN_COLOR,
+      },
+    },
     {
       id: "world-countries-fill",
       type: "fill",
@@ -838,15 +918,15 @@ function worldLayers(format) {
       paint: {
         "fill-color": [
           "case",
-          ["boolean", ["feature-state", "hover"], false],
-          "#60a5fa",
-          "transparent",
+          hoverState,
+          MAP_LAND_HOVER_COLOR,
+          MAP_LAND_COLOR,
         ],
         "fill-opacity": [
           "case",
-          ["boolean", ["feature-state", "hover"], false],
-          0.35,
-          0.01,
+          hoverState,
+          0.92,
+          0.96,
         ],
       },
     },
@@ -938,15 +1018,7 @@ function nepalProvinceLayers(format) {
       type: "fill",
       ...vectorLayer(source, sl),
       minzoom: appear,
-      paint: {
-        "fill-color": [
-          "case",
-          ["boolean", ["feature-state", "hover"], false],
-          "#3b82f6",
-          "#2563eb",
-        ],
-        "fill-opacity": layerFillOpacity(appear, peak, 0.08, 0.25),
-      },
+      paint: detailInteractiveFillPaint(),
     },
   ];
   appendDetailBoundaryLayers(layers, {
@@ -955,6 +1027,7 @@ function nepalProvinceLayers(format) {
     appear,
     peak,
     weight: BORDER_WEIGHT.region,
+    border: DETAIL_BORDER.nepalProvince,
     idPrefix: "nepal-provinces",
     lineOpacity: 0.9,
     glowOpacity: 0.2,
@@ -974,15 +1047,7 @@ function indiaStateLayers(format) {
       type: "fill",
       ...vectorLayer(source, sl),
       minzoom: z,
-      paint: {
-        "fill-color": [
-          "case",
-          ["boolean", ["feature-state", "hover"], false],
-          "#34d399",
-          "#059669",
-        ],
-        "fill-opacity": detailFillOpacity(z, 0.08, 0.25),
-      },
+      paint: detailInteractiveFillPaint(),
     },
   ];
   appendDetailBoundaryLayers(layers, {
@@ -991,6 +1056,7 @@ function indiaStateLayers(format) {
     appear: z,
     peak,
     weight: BORDER_WEIGHT.region,
+    border: DETAIL_BORDER.indiaState,
     idPrefix: "india-states",
     lineOpacity: 0.9,
     glowOpacity: 0.2,
@@ -1003,23 +1069,13 @@ function usaStateLayers(format) {
   const sl = sourceLayerFor("usa-states-fill", format);
   const z = USA_STATE_ZOOM;
   const peak = z + 0.5;
-  const hoverState = ["boolean", ["feature-state", "hover"], false];
-
   const layers = [
     {
       id: "usa-states-fill",
       type: "fill",
       ...vectorLayer(source, sl),
       minzoom: z,
-      paint: {
-        "fill-color": [
-          "case",
-          hoverState,
-          "#f87171",
-          "#dc2626",
-        ],
-        "fill-opacity": ["case", hoverState, 0.3, 0.12],
-      },
+      paint: detailInteractiveFillPaint(),
     },
   ];
   appendDetailBoundaryLayers(layers, {
@@ -1028,6 +1084,7 @@ function usaStateLayers(format) {
     appear: z,
     peak,
     weight: BORDER_WEIGHT.region,
+    border: DETAIL_BORDER.usaState,
     idPrefix: "usa-states",
     lineOpacity: 0.9,
     glowOpacity: 0.2,
@@ -1068,15 +1125,7 @@ export function usaCountyLayers(format) {
       type: "fill",
       ...vectorLayer(source, sl),
       minzoom: appear,
-      paint: {
-        "fill-color": [
-          "case",
-          ["boolean", ["feature-state", "hover"], false],
-          "#fbbf24",
-          "#d97706",
-        ],
-        "fill-opacity": layerFillOpacity(appear, peak, 0.1, 0.28),
-      },
+      paint: detailInteractiveFillPaint(),
     },
   ];
   appendDetailBoundaryLayers(layers, {
@@ -1085,6 +1134,7 @@ export function usaCountyLayers(format) {
     appear,
     peak,
     weight: BORDER_WEIGHT.district,
+    border: DETAIL_BORDER.county,
     idPrefix: "usa-counties",
     lineOpacity: 0.85,
     glowOpacity: 0.18,
@@ -1098,7 +1148,7 @@ export function nepalDistrictSources(format) {
       "nepal-districts": {
         type: "geojson",
         data: "/geojsons/nepal-districts.geojson",
-        generateId: true,
+        promoteId: "DISTRICT",
       },
     };
   }
@@ -1117,15 +1167,7 @@ export function nepalDistrictLayers(format) {
       type: "fill",
       ...vectorLayer(source, sl),
       minzoom: appear,
-      paint: {
-        "fill-color": [
-          "case",
-          ["boolean", ["feature-state", "hover"], false],
-          "#fbbf24",
-          "#d97706",
-        ],
-        "fill-opacity": layerFillOpacity(appear, peak, 0.12, 0.3),
-      },
+      paint: detailInteractiveFillPaint(),
     },
   ];
   appendDetailBoundaryLayers(layers, {
@@ -1134,6 +1176,7 @@ export function nepalDistrictLayers(format) {
     appear,
     peak,
     weight: BORDER_WEIGHT.district,
+    border: DETAIL_BORDER.district,
     idPrefix: "nepal-districts",
     lineOpacity: 0.85,
     glowOpacity: 0.18,
@@ -1166,15 +1209,7 @@ export function nepalLocalLayers(format) {
       type: "fill",
       ...vectorLayer(source, sl),
       minzoom: appear,
-      paint: {
-        "fill-color": [
-          "case",
-          ["boolean", ["feature-state", "hover"], false],
-          "#e879f9",
-          "#c026d3",
-        ],
-        "fill-opacity": layerFillOpacity(appear, peak, 0.1, 0.28),
-      },
+      paint: detailInteractiveFillPaint(),
     },
   ];
   appendDetailBoundaryLayers(layers, {
@@ -1183,6 +1218,7 @@ export function nepalLocalLayers(format) {
     appear,
     peak,
     weight: BORDER_WEIGHT.local,
+    border: DETAIL_BORDER.local,
     idPrefix: "nepal-local",
     lineOpacity: 0.8,
     glowOpacity: 0.15,

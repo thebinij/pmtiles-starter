@@ -11,13 +11,14 @@
     WORLD_MIN_ZOOM,
     buildMapStyle,
     countryPopupHtml,
+    featureCountryCode,
     featureStateTarget,
     worldMeta,
   } from "./mapConfig.js";
   import { createCountryLabelManager } from "./countryLabelManager.js";
   import { createOverlayManager } from "./overlayManager.js";
   import { collectMapStats, createGeojsonLoadTracker } from "./mapStats.js";
-  import { isMobileMap, mapLibreOptions } from "./mapPerformance.js";
+  import { isMobileMap, lockMapNorthUp, mapLibreOptions } from "./mapPerformance.js";
 
   let { format, onStats = () => {} } = $props();
 
@@ -137,8 +138,8 @@
         return layers;
       }
 
-      function inDetailView() {
-        return overlayManager?.inDetailView() ?? false;
+      function countryDetailActive(code) {
+        return overlayManager?.inDetailView(code) ?? false;
       }
 
       function fitWorldView(duration = 0) {
@@ -163,6 +164,7 @@
         renderWorldCopies: false,
         ...mapLibreOptions(),
       });
+      lockMapNorthUp(map);
 
       function ensureOverlaysLoaded() {
         overlayManager?.ensureOverlaysLoaded();
@@ -196,19 +198,23 @@
         onHoverClear: clearCountryHover,
         onOverlaysChanged: () => countryLabelManager.refreshNow(),
         setRegionHover: (target, feature) => {
+          if (!target || target.id === undefined) return;
           if (
             hoveredRegion &&
-            (hoveredRegion.id !== feature.id ||
-              hoveredRegion.source !== target.source)
+            (hoveredRegion.id !== target.id ||
+              hoveredRegion.source !== target.source ||
+              hoveredRegion.sourceLayer !== target.sourceLayer)
           ) {
             clearRegionHover();
           }
-          if (feature.id !== undefined) {
-            hoveredRegion = target;
+          hoveredRegion = target;
+          try {
             map.setFeatureState(target, { hover: true });
+          } catch (error) {
+            console.warn("Region hover state failed:", error);
           }
         },
-        clearRegionHover: dismissHoverUI,
+        clearRegionHover,
       });
 
       syncHud();
@@ -221,7 +227,12 @@
       map.on("zoom", () => {
         syncHud();
         syncWorldCopies();
-        if (inDetailView()) dismissHoverUI();
+        if (
+          hoveredCountryId !== null &&
+          countryDetailActive(hoveredCountryId)
+        ) {
+          dismissHoverUI();
+        }
       });
 
       map.on("mousemove", (e) => setPointer(e.lngLat.lng, e.lngLat.lat));
@@ -282,23 +293,23 @@
 
       if (!touchMode) {
         map.on("mousemove", "world-countries-fill", (e) => {
-          if (inDetailView()) {
-            dismissHoverUI();
+          if (!e.features?.length) return;
+          const feature = e.features[0];
+          const code = featureCountryCode(feature);
+          if (countryDetailActive(code)) {
+            clearCountryHover();
             return;
           }
-          if (!e.features?.length) return;
-          setCountryHoverFromFeature(e.features[0]);
+          setCountryHoverFromFeature(feature);
         });
 
-        map.on("mouseleave", "world-countries-fill", () => {
-          if (inDetailView()) return;
-          dismissHoverUI();
-        });
+        map.on("mouseleave", "world-countries-fill", dismissHoverUI);
       } else {
         map.on("click", "world-countries-fill", (e) => {
-          if (inDetailView()) return;
           if (!e.features?.length) return;
-          showCountryPopup(e.features[0], e.lngLat);
+          const feature = e.features[0];
+          if (countryDetailActive(featureCountryCode(feature))) return;
+          showCountryPopup(feature, e.lngLat);
         });
 
         map.on("click", (e) => {
