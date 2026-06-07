@@ -6,7 +6,6 @@
 
   let tab = $state(tabFromPath(window.location.pathname));
 
-  /** @param {'geojson' | 'pmtiles'} next */
   function navigateTab(next) {
     tab = next;
     const path = pathFromTab(next);
@@ -133,6 +132,8 @@
   }
 
   .map-panel {
+    display: flex;
+    flex-direction: column;
     width: 100%;
     height: min(72vh, 640px);
     min-height: 400px;
@@ -143,5 +144,38 @@
     box-shadow:
       0 1px 2px rgb(26 43 60 / 6%),
       0 8px 24px rgb(26 43 60 / 8%);
+  }
+
+  .map-panel > :global(*) {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+
+  @media (max-width: 640px) {
+    .page {
+      padding: 0.75rem 0.5rem;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+    }
+
+    .tabs {
+      gap: 0.35rem;
+    }
+
+    .tab {
+      flex: 1;
+      text-align: center;
+      padding: 0.55rem 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    .map-panel {
+      height: min(68vh, 560px);
+      min-height: 280px;
+      border-radius: 0 10px 10px 10px;
+    }
   }
 </style>

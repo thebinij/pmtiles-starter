@@ -12,9 +12,13 @@ export const GEOJSON_FILE_SIZES = {
   "/geojsons/usa-counties.geojson": 2962196,
 };
 
-/**
- * @param {number | null | undefined} bytes
- */
+export const PMTILES_FILE_SIZES = {
+  "/world.pmtiles": 2701326,
+  "/nepal.pmtiles": 3841073,
+  "/usa.pmtiles": 9464159,
+  "/india.pmtiles": 153372,
+};
+
 export function formatBytes(bytes) {
   if (bytes == null || bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
@@ -22,27 +26,19 @@ export function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/**
- * @param {PerformanceResourceTiming} entry
- */
 function entryBytes(entry) {
   return entry.transferSize || entry.decodedBodySize || entry.encodedBodySize || 0;
 }
 
-/**
- * @param {MapFormat} format
- */
 function resourceMatchesFormat(name, format) {
   if (format === "pmtiles") return name.includes(".pmtiles");
   return false;
 }
 
 export function createGeojsonLoadTracker() {
-  /** @type {Set<string>} */
   const loaded = new Set();
 
   return {
-    /** @param {{ type?: string, data?: unknown }} source */
     markSource(source) {
       if (source?.type !== "geojson" || typeof source.data !== "string") return;
       loaded.add(source.data);
@@ -57,11 +53,6 @@ export function createGeojsonLoadTracker() {
   };
 }
 
-/**
- * @param {MapFormat} format
- * @param {ReturnType<typeof createGeojsonLoadTracker> | null} [geojsonTracker]
- * @returns {MapStats}
- */
 export function collectMapStats(format, geojsonTracker = null) {
   const heapBytes = performance.memory?.usedJSHeapSize ?? null;
 

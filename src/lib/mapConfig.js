@@ -1,3 +1,5 @@
+import { layerRenderOptions } from "./mapPerformance.js";
+
 export const DETAIL_ZOOM = 4;
 export const INDIA_STATE_ZOOM = 3;
 export const NEPAL_DISTRICT_ZOOM = 5;
@@ -44,12 +46,10 @@ export const WORLD_BOUNDS = [
 export const WORLD_FIT_PADDING = 20;
 export const WORLD_MAX_ZOOM = DETAIL_ZOOM - 0.1;
 
-/**
- * Detail overlays load for every country whose bounds intersect the viewport.
- * Unload only when that country leaves the viewport (or falls below its min zoom).
- */
 export const OVERLAY_LIMITS = {
   unloadOnExit: true,
+  hideOnExit: true,
+  evictHiddenAfterMs: 5 * 60 * 1000,
 };
 
 export const FORMAT_META = {
@@ -61,7 +61,23 @@ export function worldMeta(format) {
   if (format === "geojson") {
     return { sourceLayer: null, promoteId: "ADM0_A3" };
   }
-  return { sourceLayer: "boundaries", promoteId: "adm0_a3" };
+  return { sourceLayer: "boundaries", promoteId: "ADM0_A3" };
+}
+
+const DETAIL_PMTILES_SOURCE = {
+  "usa-states": "usa",
+  "usa-counties": "usa",
+  "nepal-districts": "nepal",
+  "nepal-local": "nepal",
+};
+
+export function detailMapSource(detail, format) {
+  const pmtilesId = DETAIL_PMTILES_SOURCE[detail.source] ?? detail.source;
+  return overlaySourceId(format, pmtilesId, detail.source);
+}
+
+export function detailMapSourceLayer(detail, format) {
+  return sourceLayerFor(detail.fillLayer, format);
 }
 
 export const DETAIL_MAPS = {
@@ -115,13 +131,11 @@ export const NEPAL_LOCAL_MAP = {
   parent: "district",
 };
 
-/** Ordered overlay tiers — only one new tier loads per pass; next waits for idle/sourcedata. */
 export const OVERLAY_TIERS = [
   {
     id: "usa-states",
     regions: ["USA"],
     loadZoom: USA_STATE_ZOOM,
-    sourceIds: ["usa-states"],
     fillLayer: "usa-states-fill",
     sources: (format) => regionSources(format, "USA"),
     layers: (format) => regionLayers(format, "USA"),
@@ -131,7 +145,6 @@ export const OVERLAY_TIERS = [
     id: "npl-provinces",
     regions: ["NPL"],
     loadZoom: DETAIL_ZOOM,
-    sourceIds: ["nepal"],
     fillLayer: "nepal-provinces-fill",
     sources: (format) => regionSources(format, "NPL"),
     layers: (format) => regionLayers(format, "NPL"),
@@ -141,7 +154,6 @@ export const OVERLAY_TIERS = [
     id: "ind-states",
     regions: ["IND"],
     loadZoom: INDIA_STATE_ZOOM,
-    sourceIds: ["india"],
     fillLayer: "india-states-fill",
     sources: (format) => regionSources(format, "IND"),
     layers: (format) => regionLayers(format, "IND"),
@@ -152,7 +164,6 @@ export const OVERLAY_TIERS = [
     regions: ["NPL"],
     loadZoom: NEPAL_DISTRICT_ZOOM,
     requires: ["npl-provinces"],
-    sourceIds: ["nepal-districts"],
     fillLayer: "nepal-districts-fill",
     sources: nepalDistrictSources,
     layers: nepalDistrictLayers,
@@ -163,7 +174,6 @@ export const OVERLAY_TIERS = [
     regions: ["USA"],
     loadZoom: USA_COUNTY_ZOOM,
     requires: ["usa-states"],
-    sourceIds: ["usa-counties"],
     fillLayer: "usa-counties-fill",
     sources: usaCountySources,
     layers: usaCountyLayers,
@@ -174,7 +184,6 @@ export const OVERLAY_TIERS = [
     regions: ["NPL"],
     loadZoom: NEPAL_LOCAL_ZOOM,
     requires: ["npl-districts"],
-    sourceIds: ["nepal-local"],
     fillLayer: "nepal-local-fill",
     sources: nepalLocalSources,
     layers: nepalLocalLayers,
@@ -187,7 +196,10 @@ export const OVERLAY_TIER_BY_ID = Object.fromEntries(
 );
 
 export const OVERLAY_SOURCE_IDS = new Set(
-  OVERLAY_TIERS.flatMap((tier) => tier.sourceIds),
+  OVERLAY_TIERS.flatMap((tier) => [
+    ...Object.keys(tier.sources("pmtiles")),
+    ...Object.keys(tier.sources("geojson")),
+  ]),
 );
 
 export const PARENT_LOOKUPS = {
@@ -257,17 +269,35 @@ export const DYNAMIC_PARENT_LOOKUPS = {
 
 const dynamicLookupCache = new Map();
 
-export function sourceLayerFor(sourceId, format) {
+const PMTILES_LAYER_BY_FILL = {
+  "nepal-provinces-fill": "provinces",
+  "nepal-districts-fill": "districts",
+  "nepal-local-fill": "locallevels",
+  "india-states-fill": "states",
+  "usa-states-fill": "states",
+  "usa-counties-fill": "counties",
+};
+
+function pmtilesVectorSource(url, promoteId, maxzoom) {
+  return { type: "vector", url, promoteId, maxzoom };
+}
+
+function overlaySourceId(format, pmtilesId, geojsonId) {
+  return format === "pmtiles" ? pmtilesId : geojsonId;
+}
+
+function sharedPmtilesSource(format, pmtilesId) {
+  if (format !== "pmtiles") return {};
+  return { [pmtilesId]: detailSources(format)[pmtilesId] };
+}
+
+export function sourceLayerFor(sourceOrFillLayer, format) {
   if (format !== "pmtiles") return null;
-  const layers = {
-    nepal: "provinces",
-    "nepal-districts": "districts",
-    "nepal-local": "locallevels",
-    india: "states",
-    "usa-states": "states",
-    "usa-counties": "counties",
-  };
-  return layers[sourceId] ?? null;
+  if (PMTILES_LAYER_BY_FILL[sourceOrFillLayer]) {
+    return PMTILES_LAYER_BY_FILL[sourceOrFillLayer];
+  }
+  const bySource = { nepal: "provinces", india: "states", usa: "states" };
+  return bySource[sourceOrFillLayer] ?? null;
 }
 
 export function countryName(props) {
@@ -437,19 +467,6 @@ export function regionsRankedInView(lng, lat, zoom, viewBounds = null) {
   return ranked.sort((a, b) => b.score - a.score);
 }
 
-/** @deprecated Use regionsInView; kept for load-priority ordering with an optional cap. */
-export function focusedRegions(
-  lng,
-  lat,
-  zoom,
-  viewBounds = null,
-  maxCountries = Infinity,
-) {
-  return regionsRankedInView(lng, lat, zoom, viewBounds)
-    .slice(0, maxCountries)
-    .map((entry) => entry.code);
-}
-
 export function regionsInView(lng, lat, zoom, viewBounds = null) {
   return regionsRankedInView(lng, lat, zoom, viewBounds).map(
     (entry) => entry.code,
@@ -460,7 +477,11 @@ export function regionSources(format, code) {
   const sources = detailSources(format);
   if (code === "NPL") return { nepal: sources.nepal };
   if (code === "IND") return { india: sources.india };
-  if (code === "USA") return { "usa-states": sources["usa-states"] };
+  if (code === "USA") {
+    return format === "pmtiles"
+      ? { usa: sources.usa }
+      : { "usa-states": sources["usa-states"] };
+  }
   return {};
 }
 
@@ -485,10 +506,13 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
-export function popupHtml(title, subtitle) {
+export function popupHtml(title, subtitle, options = {}) {
   const safeTitle = escapeHtml(title);
-  if (!subtitle) return `<strong>${safeTitle}</strong>`;
-  return `<strong>${safeTitle}</strong><br><span class="popup-sub">${escapeHtml(subtitle)}</span>`;
+  const hint = options.hint
+    ? `<br><span class="popup-hint">${escapeHtml(options.hint)}</span>`
+    : "";
+  if (!subtitle) return `<strong>${safeTitle}</strong>${hint}`;
+  return `<strong>${safeTitle}</strong><br><span class="popup-sub">${escapeHtml(subtitle)}</span>${hint}`;
 }
 
 function buildDynamicLookup(map, format, lookupId) {
@@ -549,18 +573,18 @@ export function resolveParentLabel(map, format, props, parent) {
   return String(raw);
 }
 
-export function regionPopupHtml(map, format, feature, detail) {
+export function regionPopupHtml(map, format, feature, detail, options = {}) {
   const subtitle = resolveParentLabel(
     map,
     format,
     feature.properties,
     detail.parent,
   );
-  return popupHtml(featureLabel(feature, detail), subtitle);
+  return popupHtml(featureLabel(feature, detail), subtitle, options);
 }
 
-export function countryPopupHtml(props) {
-  return popupHtml(countryName(props));
+export function countryPopupHtml(props, options = {}) {
+  return popupHtml(countryName(props), null, options);
 }
 
 export function featureStateTarget(source, sourceLayer, id) {
@@ -637,7 +661,7 @@ function worldSource(format) {
   return {
     type: "vector",
     url: "pmtiles:///world.pmtiles",
-    promoteId: "adm0_a3",
+    promoteId: { boundaries: "ADM0_A3" },
   };
 }
 
@@ -662,21 +686,16 @@ export function detailSources(format) {
     };
   }
   return {
-    nepal: {
-      type: "vector",
-      url: "pmtiles:///nepal.pmtiles",
-      promoteId: "TARGET",
-    },
-    india: {
-      type: "vector",
-      url: "pmtiles:///india.pmtiles",
-      promoteId: "ID_1",
-    },
-    "usa-states": {
-      type: "vector",
-      url: "pmtiles:///usa-states.pmtiles",
-      promoteId: "name",
-    },
+    nepal: pmtilesVectorSource("pmtiles:///nepal.pmtiles", {
+      provinces: "TARGET",
+      districts: "id",
+      locallevels: "locallevel_fullcode",
+    }, 12),
+    india: pmtilesVectorSource("pmtiles:///india.pmtiles", "ID_1", 7),
+    usa: pmtilesVectorSource("pmtiles:///usa.pmtiles", {
+      states: "name",
+      counties: "GEOID",
+    }, 10),
   };
 }
 
@@ -767,15 +786,17 @@ function worldLayers(format) {
 }
 
 function nepalProvinceLayers(format) {
-  const sl = sourceLayerFor("nepal", format);
+  const source = overlaySourceId(format, "nepal", "nepal");
+  const sl = sourceLayerFor("nepal-provinces-fill", format);
   const appear = DETAIL_ZOOM;
   const peak = DETAIL_ZOOM + 0.5;
+  const { glow } = layerRenderOptions();
 
-  return [
+  const layers = [
     {
       id: "nepal-provinces-fill",
       type: "fill",
-      ...vectorLayer("nepal", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "fill-color": [
@@ -787,40 +808,45 @@ function nepalProvinceLayers(format) {
         "fill-opacity": layerFillOpacity(appear, peak, 0.08, 0.25),
       },
     },
-    {
+  ];
+  if (glow) {
+    layers.push({
       id: "nepal-provinces-glow",
       type: "line",
-      ...vectorLayer("nepal", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "line-color": "#93c5fd",
         "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 8, 1.5, 12, 3],
         "line-opacity": layerLineOpacity(appear, peak, 0.3),
       },
+    });
+  }
+  layers.push({
+    id: "nepal-provinces-line",
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: appear,
+    paint: {
+      "line-color": "#2563eb",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.6, 8, 1.2, 12, 2.5],
+      "line-opacity": layerLineOpacity(appear, peak, 0.9),
     },
-    {
-      id: "nepal-provinces-line",
-      type: "line",
-      ...vectorLayer("nepal", sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#2563eb",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.6, 8, 1.2, 12, 2.5],
-        "line-opacity": layerLineOpacity(appear, peak, 0.9),
-      },
-    },
-  ];
+  });
+  return layers;
 }
 
 function indiaStateLayers(format) {
-  const sl = sourceLayerFor("india", format);
+  const source = overlaySourceId(format, "india", "india");
+  const sl = sourceLayerFor("india-states-fill", format);
   const z = INDIA_STATE_ZOOM;
+  const { glow } = layerRenderOptions();
 
-  return [
+  const layers = [
     {
       id: "india-states-fill",
       type: "fill",
-      ...vectorLayer("india", sl),
+      ...vectorLayer(source, sl),
       minzoom: z,
       paint: {
         "fill-color": [
@@ -832,41 +858,46 @@ function indiaStateLayers(format) {
         "fill-opacity": detailFillOpacity(z, 0.08, 0.25),
       },
     },
-    {
+  ];
+  if (glow) {
+    layers.push({
       id: "india-states-glow",
       type: "line",
-      ...vectorLayer("india", sl),
+      ...vectorLayer(source, sl),
       minzoom: z,
       paint: {
         "line-color": "#6ee7b7",
         "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 8, 1.5, 12, 3],
         "line-opacity": detailLineOpacity(z, 0.3),
       },
+    });
+  }
+  layers.push({
+    id: "india-states-line",
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: z,
+    paint: {
+      "line-color": "#047857",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.6, 8, 1.2, 12, 2.5],
+      "line-opacity": detailLineOpacity(z, 0.9),
     },
-    {
-      id: "india-states-line",
-      type: "line",
-      ...vectorLayer("india", sl),
-      minzoom: z,
-      paint: {
-        "line-color": "#047857",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.6, 8, 1.2, 12, 2.5],
-        "line-opacity": detailLineOpacity(z, 0.9),
-      },
-    },
-  ];
+  });
+  return layers;
 }
 
 function usaStateLayers(format) {
-  const sl = sourceLayerFor("usa-states", format);
+  const source = overlaySourceId(format, "usa", "usa-states");
+  const sl = sourceLayerFor("usa-states-fill", format);
   const z = USA_STATE_ZOOM;
   const hoverState = ["boolean", ["feature-state", "hover"], false];
+  const { glow } = layerRenderOptions();
 
-  return [
+  const layers = [
     {
       id: "usa-states-fill",
       type: "fill",
-      ...vectorLayer("usa-states", sl),
+      ...vectorLayer(source, sl),
       minzoom: z,
       paint: {
         "fill-color": [
@@ -878,29 +909,32 @@ function usaStateLayers(format) {
         "fill-opacity": ["case", hoverState, 0.3, 0.12],
       },
     },
-    {
+  ];
+  if (glow) {
+    layers.push({
       id: "usa-states-glow",
       type: "line",
-      ...vectorLayer("usa-states", sl),
+      ...vectorLayer(source, sl),
       minzoom: z,
       paint: {
         "line-color": "#fca5a5",
         "line-width": ["interpolate", ["linear"], ["zoom"], 1.8, 0.6, 4, 1, 8, 1.5, 12, 3],
         "line-opacity": 0.55,
       },
+    });
+  }
+  layers.push({
+    id: "usa-states-line",
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: z,
+    paint: {
+      "line-color": "#b91c1c",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 1.8, 0.8, 4, 1.2, 8, 1.8, 12, 2.5],
+      "line-opacity": 0.95,
     },
-    {
-      id: "usa-states-line",
-      type: "line",
-      ...vectorLayer("usa-states", sl),
-      minzoom: z,
-      paint: {
-        "line-color": "#b91c1c",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 1.8, 0.8, 4, 1.2, 8, 1.8, 12, 2.5],
-        "line-opacity": 0.95,
-      },
-    },
-  ];
+  });
+  return layers;
 }
 
 export function detailLayers(format) {
@@ -921,25 +955,21 @@ export function usaCountySources(format) {
       },
     };
   }
-  return {
-    "usa-counties": {
-      type: "vector",
-      url: "pmtiles:///usa-counties.pmtiles",
-      promoteId: "GEOID",
-    },
-  };
+  return sharedPmtilesSource(format, "usa");
 }
 
 export function usaCountyLayers(format) {
-  const sl = sourceLayerFor("usa-counties", format);
+  const source = overlaySourceId(format, "usa", "usa-counties");
+  const sl = sourceLayerFor("usa-counties-fill", format);
   const appear = USA_COUNTY_ZOOM;
   const peak = USA_COUNTY_FULL_ZOOM;
+  const { glow } = layerRenderOptions();
 
-  return [
+  const layers = [
     {
       id: "usa-counties-fill",
       type: "fill",
-      ...vectorLayer("usa-counties", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "fill-color": [
@@ -951,29 +981,32 @@ export function usaCountyLayers(format) {
         "fill-opacity": layerFillOpacity(appear, peak, 0.1, 0.28),
       },
     },
-    {
+  ];
+  if (glow) {
+    layers.push({
       id: "usa-counties-glow",
       type: "line",
-      ...vectorLayer("usa-counties", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "line-color": "#fde68a",
         "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.4, 8, 1.2, 14, 2.5],
         "line-opacity": layerLineOpacity(appear, peak, 0.35),
       },
+    });
+  }
+  layers.push({
+    id: "usa-counties-line",
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: appear,
+    paint: {
+      "line-color": "#b45309",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.5, 8, 1, 14, 2],
+      "line-opacity": layerLineOpacity(appear, peak, 0.9),
     },
-    {
-      id: "usa-counties-line",
-      type: "line",
-      ...vectorLayer("usa-counties", sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#b45309",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.5, 8, 1, 14, 2],
-        "line-opacity": layerLineOpacity(appear, peak, 0.9),
-      },
-    },
-  ];
+  });
+  return layers;
 }
 
 export function nepalDistrictSources(format) {
@@ -986,25 +1019,21 @@ export function nepalDistrictSources(format) {
       },
     };
   }
-  return {
-    "nepal-districts": {
-      type: "vector",
-      url: "pmtiles:///nepal-districts.pmtiles",
-      promoteId: "id",
-    },
-  };
+  return sharedPmtilesSource(format, "nepal");
 }
 
 export function nepalDistrictLayers(format) {
-  const sl = sourceLayerFor("nepal-districts", format);
+  const source = overlaySourceId(format, "nepal", "nepal-districts");
+  const sl = sourceLayerFor("nepal-districts-fill", format);
   const appear = NEPAL_DISTRICT_ZOOM;
   const peak = NEPAL_DISTRICT_FULL_ZOOM;
+  const { glow } = layerRenderOptions();
 
-  return [
+  const layers = [
     {
       id: "nepal-districts-fill",
       type: "fill",
-      ...vectorLayer("nepal-districts", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "fill-color": [
@@ -1016,29 +1045,32 @@ export function nepalDistrictLayers(format) {
         "fill-opacity": layerFillOpacity(appear, peak, 0.12, 0.3),
       },
     },
-    {
+  ];
+  if (glow) {
+    layers.push({
       id: "nepal-districts-glow",
       type: "line",
-      ...vectorLayer("nepal-districts", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "line-color": "#fde68a",
         "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.4, 8, 1.2, 14, 2.5],
         "line-opacity": layerLineOpacity(appear, peak, 0.35),
       },
+    });
+  }
+  layers.push({
+    id: "nepal-districts-line",
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: appear,
+    paint: {
+      "line-color": "#b45309",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.5, 8, 1, 14, 2],
+      "line-opacity": layerLineOpacity(appear, peak, 0.9),
     },
-    {
-      id: "nepal-districts-line",
-      type: "line",
-      ...vectorLayer("nepal-districts", sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#b45309",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.5, 8, 1, 14, 2],
-        "line-opacity": layerLineOpacity(appear, peak, 0.9),
-      },
-    },
-  ];
+  });
+  return layers;
 }
 
 export function nepalLocalSources(format) {
@@ -1051,25 +1083,21 @@ export function nepalLocalSources(format) {
       },
     };
   }
-  return {
-    "nepal-local": {
-      type: "vector",
-      url: "pmtiles:///nepal-local.pmtiles",
-      promoteId: "locallevel_fullcode",
-    },
-  };
+  return sharedPmtilesSource(format, "nepal");
 }
 
 export function nepalLocalLayers(format) {
-  const sl = sourceLayerFor("nepal-local", format);
+  const source = overlaySourceId(format, "nepal", "nepal-local");
+  const sl = sourceLayerFor("nepal-local-fill", format);
   const appear = NEPAL_LOCAL_ZOOM;
   const peak = NEPAL_LOCAL_FULL_ZOOM;
+  const { glow } = layerRenderOptions();
 
-  return [
+  const layers = [
     {
       id: "nepal-local-fill",
       type: "fill",
-      ...vectorLayer("nepal-local", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "fill-color": [
@@ -1081,29 +1109,32 @@ export function nepalLocalLayers(format) {
         "fill-opacity": layerFillOpacity(appear, peak, 0.1, 0.28),
       },
     },
-    {
+  ];
+  if (glow) {
+    layers.push({
       id: "nepal-local-glow",
       type: "line",
-      ...vectorLayer("nepal-local", sl),
+      ...vectorLayer(source, sl),
       minzoom: appear,
       paint: {
         "line-color": "#f0abfc",
         "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 12, 1.2, 16, 2.5],
         "line-opacity": layerLineOpacity(appear, peak, 0.35),
       },
+    });
+  }
+  layers.push({
+    id: "nepal-local-line",
+    type: "line",
+    ...vectorLayer(source, sl),
+    minzoom: appear,
+    paint: {
+      "line-color": "#a21caf",
+      "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.5, 12, 1, 16, 2],
+      "line-opacity": layerLineOpacity(appear, peak, 0.9),
     },
-    {
-      id: "nepal-local-line",
-      type: "line",
-      ...vectorLayer("nepal-local", sl),
-      minzoom: appear,
-      paint: {
-        "line-color": "#a21caf",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.5, 12, 1, 16, 2],
-        "line-opacity": layerLineOpacity(appear, peak, 0.9),
-      },
-    },
-  ];
+  });
+  return layers;
 }
 
 export function buildMapStyle(format) {

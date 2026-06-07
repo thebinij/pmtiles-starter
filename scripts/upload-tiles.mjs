@@ -6,17 +6,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(__dirname, "../public");
 const bucket = process.env.R2_BUCKET ?? "worldmap-tiles";
 
-const tiles = [
-  "world.pmtiles",
-  "nepal.pmtiles",
-  "nepal-districts.pmtiles",
-  "nepal-local.pmtiles",
-  "india.pmtiles",
-  "usa-states.pmtiles",
-  "usa-counties.pmtiles",
-];
+const tiles = ["world.pmtiles", "nepal.pmtiles", "usa.pmtiles", "india.pmtiles"];
 
-console.log(`Uploading tiles to R2 bucket: ${bucket}`);
+console.log(`Uploading PMTiles to R2 bucket: ${bucket}`);
 
 for (const file of tiles) {
   const filePath = path.join(publicDir, file);

@@ -5,10 +5,6 @@ export const FORMAT_PATHS = {
   pmtiles: "/pmtiles",
 };
 
-/**
- * @param {string} pathname
- * @returns {MapFormat}
- */
 export function tabFromPath(pathname) {
   if (pathname === "/pmtiles" || pathname.startsWith("/pmtiles/")) {
     return "pmtiles";
@@ -19,9 +15,6 @@ export function tabFromPath(pathname) {
   return "geojson";
 }
 
-/**
- * @param {MapFormat} tab
- */
 export function pathFromTab(tab) {
   return FORMAT_PATHS[tab] ?? FORMAT_PATHS.geojson;
 }
